@@ -1,4 +1,3 @@
-#FROM python:3.11.5-slim-bullseye
 FROM python:alpine3.17
 
 WORKDIR /usr/src/app
