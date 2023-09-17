@@ -35,8 +35,11 @@ def pushOver(message):
       "user": USER_KEY,
       "message": message,
     }), { "Content-type": "application/x-www-form-urlencoded" })
-  logger.info("PushOver message sent !")
-  conn.getresponse()
+  response=conn.getresponse()
+  if response.status != 200:
+     logger.error("PushOver issue, error returned: " + response.status + "log: " + response.reason)
+  else:
+     logger.info("PushOver message sent !")
    
 
 def check(tournament_id, ronde):
@@ -44,19 +47,21 @@ def check(tournament_id, ronde):
   logger.debug("URL checked: "+ url)
 
   soup = BeautifulSoup(requests.get(url).content, 'html.parser')
-  print("COUCOU: " + player)
-  if re.findall(str(player), str(soup.contents)):
-    logger.info("Page a jour pour ronde: " + str(ronde))
-    # first we should find our table object:
-    table = soup.find('table', id="TablePage")
-    # then we can iterate through each row and extract either header or row values:
+  while not (re.findall(str(player), str(soup.contents))):
+    logger.info("Page non a jour pour ronde: " + str(ronde))
+    time.sleep(60)
+  #if re.findall(str(player), str(soup.contents)):
+  logger.info("Page a jour pour ronde: " + str(ronde))
+  # first we should find our table object:
+  table = soup.find('table', id="TablePage")
+  # then we can iterate through each row and extract either header or row values:
 
-    rows = []
-    for i, row in enumerate(table.find_all('tr')):
-      if i == 0:
-          header = [el.text.strip() for el in row.find_all('th')]
-      else:
-          rows.append([el.text.strip() for el in row.find_all('td')])
+  rows = []
+  for i, row in enumerate(table.find_all('tr')):
+    if i == 0:
+        header = [el.text.strip() for el in row.find_all('th')]
+    else:
+        rows.append([el.text.strip() for el in row.find_all('td')])
 
     for row in rows:
       if player in row:
@@ -67,10 +72,6 @@ def check(tournament_id, ronde):
           logger.info("Partie trouvée: \n" + message)
           pushOver(message)
           return(message)
-  else:
-     logger.info("Page non a jour pour ronde: " + str(ronde))
-     time.sleep(60)
-     check(tournamendID, ronde)
 
 logger.info("Demarrage du programme pour le tournoi: " + tournamendID + " avec " + roundTotal + " ronde pour : " + player)
 for i in range(1, int(roundTotal)+1):
