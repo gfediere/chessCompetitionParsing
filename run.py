@@ -11,7 +11,6 @@ logger.setLevel(logging.INFO)
 
 # Create a console handler
 ch = logging.StreamHandler()
-#ch.setLevel(logging.INFO)
 
 # Create a formatter
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -37,23 +36,27 @@ def pushOver(message):
     }), { "Content-type": "application/x-www-form-urlencoded" })
   response=conn.getresponse()
   if response.status != 200:
-     logger.error("PushOver issue, error returned: " + response.status + "log: " + response.reason)
+     logger.error("PushOver issue, error returned: " + str(response.status) + "log: " + response.reason)
   else:
      logger.info("PushOver message sent !")
-   
 
-def check(tournament_id, ronde):
-  url = "http://www.echecs.asso.fr/Resultats.aspx?URL=Tournois/Id/"+tournamendID+"/"+tournamendID+"&Action=0"+str(ronde)
-  logger.debug("URL checked: "+ url)
+def check_url(ronde):
+   url = "http://www.echecs.asso.fr/Resultats.aspx?URL=Tournois/Id/"+tournamendID+"/"+tournamendID+"&Action=0"+str(ronde)
+   logger.info("URL checked: "+ url)
+   soup = BeautifulSoup(requests.get(url).content, 'html.parser')
+   return soup
+      
 
-  soup = BeautifulSoup(requests.get(url).content, 'html.parser')
-  while not (re.findall(str(player), str(soup.contents))):
+def check_ronde(ronde):
+  result = check_url(ronde)
+  while not (re.findall(str(player), str(result.contents))):
     logger.info("Page non a jour pour ronde: " + str(ronde))
     time.sleep(60)
+    check_url(ronde)
   #if re.findall(str(player), str(soup.contents)):
   logger.info("Page a jour pour ronde: " + str(ronde))
   # first we should find our table object:
-  table = soup.find('table', id="TablePage")
+  table = result.find('table', id="TablePage")
   # then we can iterate through each row and extract either header or row values:
 
   rows = []
@@ -76,4 +79,4 @@ def check(tournament_id, ronde):
 logger.info("Demarrage du programme pour le tournoi: " + tournamendID + " avec " + roundTotal + " ronde pour : " + player)
 for i in range(1, int(roundTotal)+1):
   logger.info("Ronde checked: " + str(i))
-  check(tournamendID, i)
+  check_ronde(i)
