@@ -1,5 +1,5 @@
 from bs4 import BeautifulSoup
-import requests 
+import requests
 import re
 import time
 import os
@@ -26,6 +26,10 @@ tournamendID = os.environ['tournament_id']
 roundTotal = os.environ['rondes']
 player = os.environ['user']
 
+#tournamendID = 
+#roundTotal =
+#player =
+
 def pushOver(message):
   conn = http.client.HTTPSConnection("api.pushover.net:443")
   conn.request("POST", "/1/messages.json",
@@ -44,16 +48,24 @@ def check_url(ronde):
    url = "http://www.echecs.asso.fr/Resultats.aspx?URL=Tournois/Id/"+tournamendID+"/"+tournamendID+"&Action=0"+str(ronde)
    logger.info("URL checked: "+ url)
    soup = BeautifulSoup(requests.get(url).content, 'html.parser')
+   logger.info("Page content: " + str(soup.contents))
    return soup
-      
+
 
 def check_ronde(ronde):
+  while True:
+    logger.info("Appel fonction check URL pour ronde: " + str(ronde))
+    result = check_url(ronde)
+    logger.info("Page returned in while loop: " + str(result.contents))
+    if re.findall(str(player), str(result.contents)):
+        logger.info("Break")
+        break
+    else:
+        logger.info("Page non a jour pour ronde: " + str(ronde))
+        time.sleep(60)
+        continue
+
   result = check_url(ronde)
-  while not (re.findall(str(player), str(result.contents))):
-    logger.info("Page non a jour pour ronde: " + str(ronde))
-    time.sleep(60)
-    check_url(ronde)
-  #if re.findall(str(player), str(soup.contents)):
   logger.info("Page a jour pour ronde: " + str(ronde))
   # first we should find our table object:
   table = result.find('table', id="TablePage")
