@@ -48,17 +48,17 @@ def check_url(ronde):
    url = "http://www.echecs.asso.fr/Resultats.aspx?URL=Tournois/Id/"+tournamendID+"/"+tournamendID+"&Action=0"+str(ronde)
    logger.info("URL checked: "+ url)
    soup = BeautifulSoup(requests.get(url).content, 'html.parser')
-   logger.info("Page content: " + str(soup.contents))
+   logger.debug("Page content: " + str(soup.contents))
    return soup
 
 
 def check_ronde(ronde):
   while True:
-    logger.info("Appel fonction check URL pour ronde: " + str(ronde))
+    logger.debug("Appel fonction check URL pour ronde: " + str(ronde))
     result = check_url(ronde)
-    logger.info("Page returned in while loop: " + str(result.contents))
+    logger.debug("Page returned in while loop: " + str(result.contents))
     if re.findall(str(player), str(result.contents)):
-        logger.info("Break")
+        logger.debug("Break")
         break
     else:
         logger.info("Page non a jour pour ronde: " + str(ronde))
