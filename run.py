@@ -59,7 +59,7 @@ def get_ranking(roundTotal):
        break
     else:
       logger.info("Content: " + parsedContent + " NOT found")
-      time.sleep(5)
+      time.sleep(60)
       continue
   result = check_url(url)
   logger.info("Page a jour pour Resultats")
