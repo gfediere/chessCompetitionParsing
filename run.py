@@ -53,7 +53,7 @@ def get_ranking(roundTotal):
   url = "http://www.echecs.asso.fr/Resultats.aspx?URL=Tournois/Id/"+tournamendID+"/"+tournamendID+"&Action=Cl"
   while True:
     result = check_url(url)
-    parsedContent = "après la ronde " + str(roundTotal)
+    parsedContent = "après la ronde " + str(roundTotal) # Test if ranking page up-to-date regarding RoundTotal
     if re.findall(str(parsedContent), str(result.contents)):
        logger.info("Content: " + parsedContent + " found")
        break
@@ -109,7 +109,7 @@ def check_ronde(ronde):
         break
     else:
         logger.info("Page non a jour pour ronde: " + str(ronde))
-        time.sleep(60)
+        time.sleep(20) # Waiting time between URL checks
         continue
 
   result = check_url(url)
@@ -130,9 +130,9 @@ def check_ronde(ronde):
           message = ""
           message = "Ronde: " + str(ronde) + "\n" \
           + "Table: " + row[0]+ "\n" \
-          + "Joueur Noir: " + row[2] + "\n" \
+          + "Joueur Blanc: " + row[2] + "\n" \
           + "Classement: " + row[3] + "\n"  \
-          + "Joueur blanc: " + row[5] + "\n" \
+          + "Joueur Noir: " + row[5] + "\n" \
           + "Classement: " + row[6]
 
           logger.info("Partie trouvée: \n" + message)
