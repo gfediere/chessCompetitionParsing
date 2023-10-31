@@ -49,11 +49,11 @@ def check_url(url):
    logger.debug("Page content: " + str(soup.contents))
    return soup
 
-def get_ranking(roundTotal):
+def get_ranking(ronde):
   url = "http://www.echecs.asso.fr/Resultats.aspx?URL=Tournois/Id/"+tournamendID+"/"+tournamendID+"&Action=Cl"
   while True:
     result = check_url(url)
-    parsedContent = "après la ronde " + str(roundTotal) # Test if ranking page up-to-date regarding RoundTotal
+    parsedContent = "après la ronde " + str(ronde) # Test if ranking page up-to-date regarding ronde
     if re.findall(str(parsedContent), str(result.contents)):
        logger.info("Content: " + parsedContent + " found")
        break
@@ -114,6 +114,7 @@ def check_ronde(ronde):
 
   result = check_url(url)
   logger.info("Page a jour pour ronde: " + str(ronde))
+
   # first we should find our table object:
   table = result.find('table', id="TablePage")
   # then we can iterate through each row and extract either header or row values:
@@ -140,8 +141,9 @@ def check_ronde(ronde):
           return(message)
 
 logger.info("Demarrage du programme pour le tournoi: " + tournamendID + " avec " + roundTotal + " ronde pour : " + player)
-for i in range(1, int(roundTotal)+1):
- logger.info("Ronde checked: " + str(i))
- check_ronde(i)
+for rondeNumber in range(1, int(roundTotal)+1):
+ logger.info("Ronde checked: " + str(rondeNumber))
+ check_ronde(rondeNumber)
+
 logger.info("Ronde: " + str(roundTotal) + " finished waiting for results")
 get_ranking(roundTotal)
