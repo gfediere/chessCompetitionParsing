@@ -49,18 +49,20 @@ def check_url(url):
    logger.debug("Page content: " + str(soup.contents))
    return soup
 
-def get_ranking(ronde):
+def get_ranking(ronde, type="full"):
+  logger.info("Ranking type is: " + type)
   url = "http://www.echecs.asso.fr/Resultats.aspx?URL=Tournois/Id/"+tournamendID+"/"+tournamendID+"&Action=Cl"
-  while True:
-    result = check_url(url)
-    parsedContent = "après la ronde " + str(ronde) # Test if ranking page up-to-date regarding ronde
-    if re.findall(str(parsedContent), str(result.contents)):
-       logger.info("Content: " + parsedContent + " found")
-       break
-    else:
-      logger.info("Content: " + parsedContent + " NOT found")
-      time.sleep(60)
-      continue
+  if type == "full":
+    while True:
+      result = check_url(url)
+      parsedContent = "après la ronde " + str(ronde) # Test if ranking page up-to-date regarding ronde
+      if re.findall(str(parsedContent), str(result.contents)):
+        logger.info("Content: " + parsedContent + " found")
+        break
+      else:
+        logger.info("Content: " + parsedContent + " NOT found")
+        time.sleep(60)
+        continue
   result = check_url(url)
   logger.info("Page a jour pour Resultats")
   table = result.find('table', attrs = {'id':'TablePage'}) # Get Table results
@@ -69,30 +71,45 @@ def get_ranking(ronde):
     if i == 0:
       header = [el.text.strip() for el in row.find_all('th')]
     else:
-        rows.append([el.text.strip() for el in row.find_all('td')])
+      rows.append([el.text.strip() for el in row.find_all('td')])
 
   logger.info("Getting results for: " + player)   
   categorie = ""
   message = ""   
   for cell in rows:
     if player in cell:
-      logger.info("Player: " + player + " FOUND in page: " + url)
-      
-      message = "Resultats pour: " + player + "\n" \
-      + "Classement: " + cell[0] + "\n" \
-      + "Catégorie: " + cell[4] + "\n" \
-      + "Points: " + cell[8]
+      points = cell[8]
       categorie = cell[4]
-  logger.info(message)
+      classementGeneral = cell[0]
+
+      logger.info("Player: " + player + " FOUND in page: " + url)
+      message = "Resultats pour " + player + " apres la ronde " + str(ronde) + "\n"
+
+      if type == "light":
+        message += "Classement General: " + classementGeneral + "\n" \
+        + "Points: " + points + "\n"
+
+      else: # full ranking
+        message += "Classement General: " + classementGeneral + "\n" \
+        + "Catégorie: " + categorie + "\n" \
+        + "Points: " + points + "\n\n"
 
   logger.info("Getting results for: " + player + " in category: " + categorie)
-  message += "\n\nClassement pour categorie: " + categorie + "\n"
+  message += "Classement pour categorie " + categorie + "\n"
+  rowNumber = 0
   for cell in rows:
       if categorie in cell:
-         message += cell[0] + " - " + cell[2] + "\n" \
-         + "Club: " + cell[7] + "\n" \
-         + "Points " + cell[8] + "\n" \
-         + "Perf " + cell[10] + "\n\n"
+        rowNumber += 1
+        if type == "light":
+          message += str(rowNumber) + "-" + cell[2] + " / Points: " + cell[8] + "\n"
+
+        else:
+          message += str(rowNumber) + "-" + cell[2] + "\n" \
+          + "Classement General: " + cell[0] + "\n" \
+          + "Club: " + cell[7] + "\n" \
+          + "Points " + cell[8] + "\n" \
+          + "Perf " + cell[10] + "\n\n"
+  
   logger.info(message)
   pushOver(message)
   return(message)
@@ -105,12 +122,12 @@ def check_ronde(ronde):
     result = check_url(url)
     logger.debug("Page returned in while loop: " + str(result.contents))
     if re.findall(str(player), str(result.contents)):
-        logger.debug("Break")
-        break
+      logger.debug("Break")
+      break
     else:
-        logger.info("Page non a jour pour ronde: " + str(ronde))
-        time.sleep(20) # Waiting time between URL checks
-        continue
+      logger.info("Page non a jour pour ronde: " + str(ronde))
+      time.sleep(20) # Waiting time between URL checks
+      continue
 
   result = check_url(url)
   logger.info("Page a jour pour ronde: " + str(ronde))
@@ -122,28 +139,29 @@ def check_ronde(ronde):
   rows = []
   for i, row in enumerate(table.find_all('tr')):
     if i == 0:
-        header = [el.text.strip() for el in row.find_all('th')]
+      header = [el.text.strip() for el in row.find_all('th')]
     else:
-        rows.append([el.text.strip() for el in row.find_all('td')])
+      rows.append([el.text.strip() for el in row.find_all('td')])
 
     for row in rows:
       if player in row:
-          message = ""
-          message = "Ronde: " + str(ronde) + "\n" \
-          + "Table: " + row[0]+ "\n" \
-          + "Joueur Blanc: " + row[2] + "\n" \
-          + "Classement: " + row[3] + "\n"  \
-          + "Joueur Noir: " + row[5] + "\n" \
-          + "Classement: " + row[6]
+        message = ""
+        message = "Ronde: " + str(ronde) + "\n" \
+        + "Table: " + row[0]+ "\n" \
+        + "Joueur Blanc: " + row[2] + "\n" \
+        + "Classement: " + row[3] + "\n"  \
+        + "Joueur Noir: " + row[5] + "\n" \
+        + "Classement: " + row[6]
 
-          logger.info("Partie trouvée: \n" + message)
-          pushOver(message)
-          return(message)
+        logger.info("Partie trouvée: \n" + message)
+        pushOver(message)
+        return(message)
 
 logger.info("Demarrage du programme pour le tournoi: " + tournamendID + " avec " + roundTotal + " ronde pour : " + player)
 for rondeNumber in range(1, int(roundTotal)+1):
- logger.info("Ronde checked: " + str(rondeNumber))
- check_ronde(rondeNumber)
+  logger.info("Ronde checked: " + str(rondeNumber))
+  check_ronde(rondeNumber)
+  get_ranking(rondeNumber, "light")
 
 logger.info("Ronde: " + str(roundTotal) + " finished waiting for results")
 get_ranking(roundTotal)
