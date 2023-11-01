@@ -111,9 +111,7 @@ def get_ranking(ronde, type="full"):
           + "Perf " + cell[10] + "\n\n"
   
   logger.info(message)
-  pushOver(message)
   return(message)
-
 
 def check_ronde(ronde):
   while True:
@@ -154,14 +152,16 @@ def check_ronde(ronde):
         + "Classement: " + row[6]
 
         logger.info("Partie trouvée: \n" + message)
-        pushOver(message)
         return(message)
 
 logger.info("Demarrage du programme pour le tournoi: " + tournamendID + " avec " + roundTotal + " ronde pour : " + player)
 for rondeNumber in range(1, int(roundTotal)+1):
+  message = ""
   logger.info("Ronde checked: " + str(rondeNumber))
-  check_ronde(rondeNumber)
-  get_ranking(rondeNumber, "light")
+  message += check_ronde(rondeNumber) + "\n\n"
+  message += get_ranking(rondeNumber, "light")
+  logger.info("Message est: \n" + message)
+  pushOver(message)
 
 logger.info("Ronde: " + str(roundTotal) + " finished waiting for results")
 get_ranking(roundTotal)
