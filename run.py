@@ -159,7 +159,9 @@ for rondeNumber in range(1, int(roundTotal)+1):
   message = ""
   logger.info("Ronde checked: " + str(rondeNumber))
   message += check_ronde(rondeNumber) + "\n\n"
-  message += get_ranking(rondeNumber-1, "light")
+  if rondeNumber-1 != 0:
+    message += get_ranking(rondeNumber-1, "light")
+  
   logger.info("Message est: \n" + message)
   pushOver(message)
 
