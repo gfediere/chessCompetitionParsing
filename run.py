@@ -107,8 +107,7 @@ def get_ranking(ronde, type="full"):
           message += str(rowNumber) + "-" + cell[2] + "\n" \
           + "Classement General: " + cell[0] + "\n" \
           + "Club: " + cell[7] + "\n" \
-          + "Points " + cell[8] + "\n" \
-          + "Perf " + cell[10] + "\n\n"
+          + "Points " + cell[8] + "\n\n" \
   
   logger.info(message)
   return(message)
@@ -155,15 +154,18 @@ def check_ronde(ronde):
         return(message)
 
 logger.info("Demarrage du programme pour le tournoi: " + tournamendID + " avec " + roundTotal + " ronde pour : " + player)
+
 for rondeNumber in range(1, int(roundTotal)+1):
   message = ""
   logger.info("Ronde checked: " + str(rondeNumber))
   message += check_ronde(rondeNumber) + "\n\n"
   if rondeNumber-1 != 0:
     message += get_ranking(rondeNumber-1, "light")
-  
+
   logger.info("Message est: \n" + message)
   pushOver(message)
 
 logger.info("Ronde: " + str(roundTotal) + " finished waiting for results")
-get_ranking(roundTotal)
+message = get_ranking(roundTotal)
+logger.info("Message Final est: \n" + message)
+pushOver(message)
