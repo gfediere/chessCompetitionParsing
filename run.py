@@ -153,7 +153,30 @@ def check_ronde(ronde):
         logger.info("Partie trouvée: \n" + message)
         return(message)
 
-logger.info("Demarrage du programme pour le tournoi: " + tournamendID + " avec " + roundTotal + " ronde pour : " + player)
+def tournamentName(tournamendID):
+  url = "http://www.echecs.asso.fr/FicheTournoi.aspx?Ref=" + tournamendID
+  results = check_url(url)
+  table = table = results.find('table', id="ctl00_ContentPlaceHolderMain_TableTournoi") # Get Table results
+  rows = []
+  for i, row in enumerate(table.find_all('tr')):
+    rows.append([el.text.strip() for el in row.find_all('td')])
+
+  tournamendName = str(rows[0][0])
+  logger.info("Tournament name: " + tournamendName)
+  return(tournamendName)
+
+log = "Demarrage du programme pour le tournoi: " + tournamendID + " avec " + roundTotal + " ronde pour : " + player
+logger.info(log)
+
+tournamendName = tournamentName(tournamendID)
+message = ""
+message += "Notifications activées pour:\n" \
+"Nom du tournoi: " + tournamendName + "\n" \
++ "Joueur: " + player + "\n" \
++ "Nombre de rondes: " + roundTotal
+logger.info(message)
+
+pushOver(message)
 
 for rondeNumber in range(1, int(roundTotal)+1):
   message = ""
