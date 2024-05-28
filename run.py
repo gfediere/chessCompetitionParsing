@@ -27,6 +27,13 @@ tournament_id = os.environ['tournament_id']
 round_total = os.environ['rounds']
 player = os.environ['user']
 
+# When tables pairings are sent, ELO's opponent could be disabled on the message
+if "no-notification-players-ranking" in os.environ:
+  notification_players_ranking = False
+else:
+  notification_players_ranking = True
+logger.info("Notification ranking on pairings: " + str(notification_players_ranking))
+
 def push_over(message): # PushOver function to send notifications
   if not "dry-run" in os.environ:
     conn = http.client.HTTPSConnection("api.pushover.net:443")
@@ -144,12 +151,16 @@ def check_round(round_number):
     for row in rows:
       if player in row:
         message = ""
-        message = "Ronde: " + str(round_number) + "\n" \
-        + "Table: " + row[0]+ "\n" \
-        + "Joueur Blanc: " + row[2] + "\n" \
-        + "Classement: " + row[3] + "\n"  \
-        + "Joueur Noir: " + row[5] + "\n" \
-        + "Classement: " + row[6]
+        message += "Ronde: " + str(round_number) + "\n"
+        message += "Table: " + row[0]+ "\n"
+
+        message += "Joueur Blanc: " + row[2]
+        if notification_players_ranking:
+          message += "\n" + "Classement: " + row[3]
+
+        message += "\n" "Joueur Noir: " + row[5]
+        if notification_players_ranking:
+          message += "\n" + "Classement: " + row[6]
 
         logger.info("Round found: \n" + message)
         return(message)
