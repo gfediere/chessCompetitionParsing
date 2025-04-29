@@ -27,6 +27,10 @@ tournament_id = os.environ['tournament_id']
 round_total = os.environ['rounds']
 player = os.environ['user']
 
+round_start = 1
+if "round_start" in os.environ:
+  round_start = os.environ['round_start']
+
 # When tables pairings are sent, ELO's opponent could be disabled on the message
 if "no-notification-players-ranking" in os.environ:
   notification_players_ranking = False
@@ -178,6 +182,7 @@ def tournament_name(tournament_id):
   return(tournamentName)
 
 log = "Starting program for tournament: " + tournament_id + " with " + round_total + " rounds for: " + player
+log = "Starting on round: " + str(round_start)
 logger.info(log)
 
 tournamentName = tournament_name(tournament_id)
@@ -190,7 +195,8 @@ logger.info(message)
 
 push_over(message)
 
-for rondeNumber in range(1, int(round_total)+1):
+
+for rondeNumber in range(int(round_start), int(round_total)+1):
   message = ""
   logger.info("Round checked: " + str(rondeNumber))
   message += check_round(rondeNumber) + "\n\n"

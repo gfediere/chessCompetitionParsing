@@ -16,4 +16,5 @@ pushover_app_token=friufriubrf # PushOver token
 pushover_user_key=rfughrfygrf # PushOver user key
 dry-run=True # if mentioned, the program won't send any notification (only dry run)
 no-notification-players-ranking=True # If mentioned, opponent ELO won't be sent on table pairings
+round_start=2 # Optional to start from a round number, not first one
 ```
