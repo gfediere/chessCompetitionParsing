@@ -124,6 +124,31 @@ def get_ranking(round, type="full"): # Provide ranking for a given User
   logger.info(message)
   return(message)
 
+def get_player_details(player):
+  url = "https://www.echecs.asso.fr/Resultats.aspx?URL=Tournois/Id/"+tournament_id+"/"+tournament_id+"&Action=Ls"
+  result = check_url(url)
+  logger.debug("Get details for player: "+ player)
+  table = result.find('table', id="TablePage")
+
+  rows = []
+  category = ""
+  club = ""
+  for i, row in enumerate(table.find_all('tr')):
+    if i == 0:
+      header = [el.text.strip() for el in row.find_all('th')]
+    else:
+      rows.append([el.text.strip() for el in row.find_all('td')])
+
+    for row in rows:
+      if player in row:
+        category = row[4]
+        club = row[7]
+        logger.info("Player found in details page: " + player + " Club: " + club + " Category: " + category)
+        return [category,club]
+      #else:
+        #logger.info("Player NOT found in details page: " + player)
+  return ["Non trouvé","Non trouvé"]
+
 def check_round(round_number):
   while True:
     logger.debug("Call check_url function for round: " + str(round_number))
@@ -156,15 +181,21 @@ def check_round(round_number):
       if player in row:
         message = ""
         message += "Ronde: " + str(round_number) + "\n"
-        message += "Table: " + row[0]+ "\n"
+        message += "Table: " + row[0] + "\n"
 
-        message += "Joueur Blanc: " + row[2]
+        whitePlayerDetails = get_player_details(row[2])
+        message += "Joueur Blanc: " + row[2] + "\n"
+        message += "Categorie: " + whitePlayerDetails[0] + "\n"
+        message += "Club: " + whitePlayerDetails[1] + "\n"
         if notification_players_ranking:
-          message += "\n" + "Classement: " + row[3]
+          message += "\n" + "Classement: " + row[3] + "\n"
 
-        message += "\n" "Joueur Noir: " + row[5]
+        blackPlayerDetails = get_player_details(row[5])
+        message += "\n" "Joueur Noir: " + row[5] + "\n"
+        message += "Categorie: " + blackPlayerDetails[0] + "\n"
+        message += "Club: " + blackPlayerDetails[1] + "\n"
         if notification_players_ranking:
-          message += "\n" + "Classement: " + row[6]
+          message += "\n" + "Classement: " + row[6] + "\n"
 
         logger.info("Round found: \n" + message)
         return(message)
