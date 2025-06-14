@@ -186,16 +186,16 @@ def check_round(round_number):
         whitePlayerDetails = get_player_details(row[2])
         message += "Joueur Blanc: " + row[2] + "\n"
         message += "Categorie: " + whitePlayerDetails[0] + "\n"
-        message += "Club: " + whitePlayerDetails[1] + "\n"
+        message += "Club: " + whitePlayerDetails[1]
         if notification_players_ranking:
-          message += "\n" + "Classement: " + row[3] + "\n"
+          message += "\n" + "Classement: " + row[3]
 
         blackPlayerDetails = get_player_details(row[5])
-        message += "\n" "Joueur Noir: " + row[5] + "\n"
+        message += "\n \nJoueur Noir: " + row[5] + "\n"
         message += "Categorie: " + blackPlayerDetails[0] + "\n"
-        message += "Club: " + blackPlayerDetails[1] + "\n"
+        message += "Club: " + blackPlayerDetails[1]
         if notification_players_ranking:
-          message += "\n" + "Classement: " + row[6] + "\n"
+          message += "\n" + "Classement: " + row[6]
 
         logger.info("Round found: \n" + message)
         return(message)
