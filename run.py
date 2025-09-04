@@ -55,11 +55,41 @@ def push_over(message): # PushOver function to send notifications
   else:
     logger.info("Dry run program PushOver not sent !")
 
-def check_url(url): # Check website URL for a given tournament
-   logger.info("URL checked: "+ url)
-   webpage = BeautifulSoup(requests.get(url).content, 'html.parser')
-   logger.debug("Page content: " + str(webpage.contents))
-   return webpage # Return HTML Page
+def check_url(url: str, retries: int = 3, backoff: float = 2.0):
+    """
+    Fetch and parse a webpage with BeautifulSoup, retrying on errors.
+    
+    Args:
+        url (str): The target URL.
+        retries (int): Number of retry attempts before failing.
+        backoff (float): Base seconds to wait between retries (exponential).
+    
+    Returns:
+        BeautifulSoup | None: Parsed HTML or None if all retries failed.
+    """
+    attempt = 0
+    while attempt < retries:
+        try:
+            logger.info("Checking URL (attempt %d/%d): %s", attempt + 1, retries, url)
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+
+            webpage = BeautifulSoup(response.content, "html.parser")
+            logger.debug("Page fetched successfully, length: %d characters", len(response.text))
+            return webpage
+
+        except requests.exceptions.RequestException as e:
+            attempt += 1
+            logger.warning("Error fetching URL %s (attempt %d/%d): %s", url, attempt, retries, e)
+            
+            if attempt < retries:
+                sleep_time = backoff ** attempt
+                logger.info("Retrying in %.1f seconds...", sleep_time)
+                time.sleep(sleep_time)
+            else:
+                logger.error("All retries failed for URL: %s", url)
+
+    return None
 
 def get_ranking(round, type="full"): # Provide ranking for a given User
   logger.info("Ranking type is: " + type)
