@@ -55,7 +55,7 @@ def push_over(message): # PushOver function to send notifications
   else:
     logger.info("Dry run program PushOver not sent !")
 
-def check_url(url: str, retries: int = 3, backoff: float = 2.0):
+def check_url(url: str, retries: int = 20, backoff: float = 5.0):
     """
     Fetch and parse a webpage with BeautifulSoup, retrying on errors.
     
