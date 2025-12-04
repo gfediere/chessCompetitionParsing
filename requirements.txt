@@ -1,2 +1,4 @@
 beautifulsoup4==4.12.2
 requests==2.32.2
+werkzeug==3.0.6
+django==2.2.24
