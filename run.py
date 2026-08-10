@@ -23,7 +23,7 @@ ch.setFormatter(formatter)
 logger.addHandler(ch)
 
 # ---------------------------------------------------------------------------
-# CONFIGURATION VIA ENV VARIABLES
+# CONFIGURATION ET REPERTOIRE DES DONNEES
 # ---------------------------------------------------------------------------
 app_token = os.environ.get("pushover_app_token")
 user_key = os.environ.get("pushover_user_key")
@@ -38,6 +38,11 @@ notification_players_ranking = "no-notification-players-ranking" not in os.envir
 
 # Détection du mode Dry Run
 is_dry_run = "dry-run" in os.environ or os.environ.get("dry_run") == "True"
+
+# Dossier de stockage fixe sous ./data
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE_DIR, "data")
+os.makedirs(DATA_DIR, exist_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -79,12 +84,12 @@ def update_status(
     match_info=None,
     round_history=None,
 ):
-    """Enregistre l'état du bot, les détails du match courant et les points cumulés."""
+    """Enregistre l'état du bot et les détails du match courant dans DATA_DIR."""
     t_id = os.environ.get("tournament_id", "unknown").strip()
     u_name = os.environ.get("user", "unknown").strip()
 
     clean_player = u_name.replace(" ", "_")
-    status_file = f"status_{t_id}_{clean_player}.json"
+    status_file = os.path.join(DATA_DIR, f"status_{t_id}_{clean_player}.json")
 
     if os.path.exists(status_file):
         try:

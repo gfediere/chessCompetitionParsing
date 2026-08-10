@@ -18,6 +18,11 @@ app.secret_key = os.urandom(24)
 
 active_bots = {}
 
+# Dossier de stockage fixe sous ./data
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE_DIR, "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+
 # ---------------------------------------------------------------------------
 # HELPER DE NETTOYAGE D'ENCODAGE & TEXTE & CALCUL DE POINTS
 # ---------------------------------------------------------------------------
@@ -368,9 +373,10 @@ PLAYER_MOBILE_TEMPLATE = """
 # ---------------------------------------------------------------------------
 
 def get_statuses():
-    """Lit tous les fichiers status_*.json."""
+    """Lit tous les fichiers status_*.json dans DATA_DIR."""
     statuses = {}
-    for filepath in glob.glob("status_*.json"):
+    pattern = os.path.join(DATA_DIR, "status_*.json")
+    for filepath in glob.glob(pattern):
         try:
             with open(filepath, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -429,7 +435,7 @@ def player_view_slug(tournament_id, player_slug):
             status_info = data
             found_player_name = p_name
             clean_player = p_name.replace(" ", "_")
-            target_filepath = f"status_{t_id}_{clean_player}.json"
+            target_filepath = os.path.join(DATA_DIR, f"status_{t_id}_{clean_player}.json")
             break
 
     # RAFRAÎCHISSEMENT EN DIRECT : Consulte la page de la ronde si une partie est 'En cours'
