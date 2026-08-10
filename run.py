@@ -2,7 +2,6 @@ import http.client
 import json
 import logging
 import os
-import re
 import time
 import unicodedata
 import urllib.parse
@@ -13,51 +12,45 @@ import requests
 # LOGGING SETUP
 # ---------------------------------------------------------------------------
 logger = logging.getLogger("chessCompetitionLogger")
-
 log_level_str = os.environ.get("logLevel", "INFO").upper()
-logger.setLevel(getattr(logging, log_level_str, logging.INFO))
+log_level = getattr(logging, log_level_str, logging.INFO)
 
-ch = logging.StreamHandler()
-formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-ch.setFormatter(formatter)
-logger.addHandler(ch)
+logging.basicConfig(
+    level=log_level,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    force=True
+)
 
 # ---------------------------------------------------------------------------
-# CONFIGURATION ET REPERTOIRE DES DONNEES
+# CONSTANTS & DIRECTORIES
 # ---------------------------------------------------------------------------
-app_token = os.environ.get("pushover_app_token")
-user_key = os.environ.get("pushover_user_key")
+INTERVAL_WAIT_PAIRINGS = 30     # 30s waiting for pairings
+INTERVAL_GAME_IN_PROGRESS = 180 # 3 min while games are in progress
+INTERVAL_CHECK_RESULT = 30      # 30s when waiting for results publication
+
 tournament_id = os.environ.get("tournament_id")
-round_total = os.environ.get("rounds")
-player = os.environ.get("user")
-
-server_url = os.environ.get("SERVER_URL", "https://chess-bot.fedallica.fr").rstrip("/")
-
+round_total = int(os.environ.get("rounds", 7))
 round_start = int(os.environ.get("round_start", 1))
-notification_players_ranking = "no-notification-players-ranking" not in os.environ
 
-# Détection du mode Dry Run
-is_dry_run = "dry-run" in os.environ or os.environ.get("dry_run") == "True"
-
-# Dossier de stockage fixe sous ./data
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, "data")
-os.makedirs(DATA_DIR, exist_ok=True)
+DATA_DIR = os.path.join(BASE_DIR, "data")                   # Player status files
+SUBSCRIPTIONS_DIR = os.path.join(BASE_DIR, "subscriptions") # Active subscriptions
 
+os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(SUBSCRIPTIONS_DIR, exist_ok=True)
+
+SUBSCRIPTION_FILE = os.path.join(SUBSCRIPTIONS_DIR, f"sub_{tournament_id}.json")
 
 # ---------------------------------------------------------------------------
-# FUNCTIONS
+# HELPERS
 # ---------------------------------------------------------------------------
 def clean_text(text: str) -> str:
-    """Nettoie les espaces insécables, accents et espaces superflus."""
     if not text:
         return ""
     text = unicodedata.normalize("NFKD", text).replace("\xa0", " ")
     return " ".join(text.split()).lower()
 
-
 def calculate_total_points(round_history: list) -> float:
-    """Calcule le total cumulé de points à partir de l'historique des résultats."""
     total = 0.0
     for item in round_history:
         res = item.get("result", "")
@@ -69,453 +62,306 @@ def calculate_total_points(round_history: list) -> float:
             total += 0.5
     return total
 
-
 def format_points(points: float) -> str:
-    """Formate le score proprement (ex: 2.5 pts au lieu de 2.50)."""
     if points.is_integer():
         return f"{int(points)}"
     return f"{points}"
 
-
-def update_status(
-    current_round,
-    status="En cours",
-    t_name="Tournoi inconnu",
-    match_info=None,
-    round_history=None,
-):
-    """Enregistre l'état du bot et les détails du match courant dans DATA_DIR."""
-    t_id = os.environ.get("tournament_id", "unknown").strip()
-    u_name = os.environ.get("user", "unknown").strip()
-
-    clean_player = u_name.replace(" ", "_")
-    status_file = os.path.join(DATA_DIR, f"status_{t_id}_{clean_player}.json")
-
-    if os.path.exists(status_file):
+def load_subscriptions() -> dict:
+    """Dynamically reloads the list of subscriptions for this tournament."""
+    if os.path.exists(SUBSCRIPTION_FILE):
         try:
-            with open(status_file, "r", encoding="utf-8") as f:
-                existing_data = json.load(f)
-                if t_name == "Tournoi inconnu":
-                    t_name = existing_data.get("tournament_name", t_name)
-                if match_info is None:
-                    match_info = existing_data.get("match_info")
-                if round_history is None:
-                    round_history = existing_data.get("round_history", [])
-        except Exception:
-            pass
+            with open(SUBSCRIPTION_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                logger.debug(f"[Subscriptions] Reading {SUBSCRIPTION_FILE} ({len(data.get('players', {}))} subscribed player(s))")
+                return data
+        except Exception as e:
+            logger.error(f"[Subscriptions] Error reading {SUBSCRIPTION_FILE}: {e}")
+    return {"players": {}}
 
-    if round_history is None:
-        round_history = []
-
-    current_points = calculate_total_points(round_history)
-
-    data = {
-        "tournament_id": t_id,
-        "tournament_name": t_name,
-        "user": u_name,
-        "current_round": current_round,
-        "total_rounds": os.environ.get("rounds"),
-        "status": status,
-        "current_points": current_points,
-        "match_info": match_info,
-        "round_history": round_history,
-    }
-
-    try:
-        with open(status_file, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False)
-    except Exception as e:
-        logger.error(f"Erreur d'écriture du fichier statut : {e}")
-
-
-def push_over(message: str, url: str = None, url_title: str = None):
-    """Envoyer une notification Pushover (gère le mode dry run)."""
-    if is_dry_run:
-        logger.info(f"🧪 [DRY RUN] Message Pushover non envoyé :\n--- MESSAGE ---\n{message}\nURL: {url}\n---------------")
+def push_over(player_cfg: dict, message: str, url: str = None, url_title: str = None):
+    player_name = player_cfg.get("name", "Unknown")
+    if player_cfg.get("dry_run", False):
+        logger.info(f"[DRY RUN] Pushover notification not sent to {player_name}:\n--- MESSAGE ---\n{message}\nURL: {url}\n---------------")
         return
 
     try:
         conn = http.client.HTTPSConnection("api.pushover.net:443")
         payload_data = {
-            "token": app_token,
-            "user": user_key,
+            "token": player_cfg.get("pushover_app_token"),
+            "user": player_cfg.get("pushover_user_key"),
             "message": message,
         }
-
         if url:
             payload_data["url"] = url
-            payload_data["url_title"] = url_title or "📱 Suivi Mobile du Joueur"
+            payload_data["url_title"] = url_title or "Player Mobile Tracking"
 
         payload = urllib.parse.urlencode(payload_data)
         headers = {"Content-type": "application/x-www-form-urlencoded"}
         conn.request("POST", "/1/messages.json", payload, headers)
-        response = conn.getresponse()
-
-        if response.status != 200:
-            logger.error(f"PushOver error {response.status}: {response.reason}")
-        else:
-            logger.info("PushOver message sent!")
+        conn.getresponse()
+        logger.info(f"[Pushover] Notification successfully sent to {player_name}")
     except Exception as e:
-        logger.error(f"Failed to send PushOver notification: {e}")
+        logger.error(f"[Pushover] Failed to send notification for {player_name}: {e}")
 
-
-def check_url(
-    url: str, retries: int = 3, backoff: float = 1.5
-) -> BeautifulSoup | None:
-    """Télécharge et parse une page FFE en forçant l'encodage ISO-8859-1."""
+def check_url(url: str, retries: int = 3) -> BeautifulSoup | None:
     attempt = 0
     while attempt < retries:
         try:
-            logger.info(f"Checking URL (attempt {attempt + 1}/{retries}): {url}")
+            logger.debug(f"[HTTP GET] FFE request (attempt {attempt + 1}/{retries}): {url}")
             response = requests.get(url, timeout=10)
             response.encoding = 'iso-8859-1'
             response.raise_for_status()
             return BeautifulSoup(response.text, "html.parser")
-
-        except requests.exceptions.RequestException as e:
+        except Exception as e:
             attempt += 1
-            logger.warning(
-                f"Error fetching URL {url} (attempt {attempt}/{retries}): {e}"
-            )
+            logger.warning(f"[HTTP GET] Failed for {url} ({e}) - attempt {attempt}/{retries}")
             if attempt < retries:
-                sleep_time = backoff**attempt
-                time.sleep(sleep_time)
-            else:
-                logger.error(f"All retries failed for URL: {url}")
+                time.sleep(2)
+    logger.error(f"[HTTP GET] Unable to reach URL after {retries} attempts: {url}")
     return None
 
-
-def get_match_result(round_number: int) -> str:
-    """Extrait le résultat de la partie directement sur la page de la ronde."""
-    action_round = f"{round_number:02d}" if round_number < 10 else str(round_number)
-    url_round = f"https://www.echecs.asso.fr/Resultats.aspx?URL=Tournois/Id/{tournament_id}/{tournament_id}&Action={action_round}"
-    result = check_url(url_round)
-
-    if result:
-        table = result.find("table", id="TablePage")
-        if table:
-            clean_player = clean_text(player)
-            player_tokens = [w for w in clean_player.split() if len(w) > 2]
-
-            for row in table.find_all("tr")[1:]:
-                cells = [clean_text(el.text) for el in row.find_all("td")]
-                row_str = " ".join(cells)
-                
-                if all(token in row_str for token in player_tokens):
-                    white_player = cells[2] if len(cells) > 2 else ""
-                    is_white = all(token in white_player for token in player_tokens)
-
-                    if "1 - 0" in row_str or "1-0" in row_str:
-                        return "1 - 0" if is_white else "0 - 1"
-                    elif "0 - 1" in row_str or "0-1" in row_str:
-                        return "0 - 1" if is_white else "1 - 0"
-                    elif "1/2" in row_str or "½" in row_str or "x - x" in row_str or "x-x" in row_str:
-                        return "½ - ½"
-
-    return "En cours"
-
-
-def wait_for_round_result(round_number: int, check_interval_sec: int = 45) -> str:
-    """Sonde la page de la ronde en direct jusqu'à la publication de la feuille de partie."""
-    logger.info(f"🔍 Début du suivi en direct du résultat de la Ronde {round_number}...")
-    while True:
-        res = get_match_result(round_number)
-        if res != "En cours":
-            logger.info(f"✅ Résultat de la ronde {round_number} publié en direct : {res}")
-            return res
-        
-        time.sleep(check_interval_sec)
-
-
-def check_round(round_number: int) -> tuple[str, dict]:
-    """Attend la publication d'une ronde et extrait le message + les détails du match."""
-    action_round = f"{round_number:02d}" if round_number < 10 else str(round_number)
-    url = f"https://www.echecs.asso.fr/Resultats.aspx?URL=Tournois/Id/{tournament_id}/{tournament_id}&Action={action_round}"
-
-    logger.info(f"Vérification des appariements pour la ronde {round_number} (URL: {url})")
-
-    clean_player = clean_text(player)
-    player_tokens = [w for w in clean_player.split() if len(w) > 2]
-
-    while True:
-        result = check_url(url)
-        if result:
-            page_text = clean_text(result.get_text())
-            if all(token in page_text for token in player_tokens):
-                logger.info(f"Joueur '{player}' trouvé dans les appariements de la ronde {round_number} !")
-                break
-
-        logger.info(f"Ronde {round_number} non encore publiée ou joueur non trouvé. Attente 30s...")
-        time.sleep(30)
-
-    table = result.find("table", id="TablePage")
-    if not table:
-        logger.error(f"Tableau 'TablePage' non trouvé sur la page de la ronde {round_number}")
-        return f"Erreur d'extraction de la ronde {round_number}", {}
-
-    rows = []
-    for row in table.find_all("tr")[1:]:
-        cells = [el.text.strip() for el in row.find_all("td")]
-        if cells:
-            rows.append(cells)
-
-    for row in rows:
-        row_str = clean_text(" ".join(row))
-        if all(token in row_str for token in player_tokens):
-            table_num = row[0]
-            white_player = row[2]
-            white_elo = row[3] if len(row) > 3 else ""
-            black_player = row[5] if len(row) > 5 else ""
-            black_elo = row[6] if len(row) > 6 else ""
-
-            is_white = all(token in clean_text(white_player) for token in player_tokens)
-            color = "Blancs" if is_white else "Noirs"
-            opponent = black_player if is_white else white_player
-
-            match_data = {
-                "round": round_number,
-                "table": table_num,
-                "opponent": opponent,
-                "color": color,
-                "result": "En cours",
-            }
-
-            white_details = get_player_details(white_player)
-            black_details = get_player_details(black_player)
-
-            message = f"Ronde: {round_number}\nTable: {table_num}\n\n"
-            message += f"Joueur Blanc: {white_player}\nCatégorie: {white_details[0]}\nClub: {white_details[1]}"
-            if notification_players_ranking:
-                message += f"\nClassement: {white_elo}"
-
-            message += f"\n\nJoueur Noir: {black_player}\nCatégorie: {black_details[0]}\nClub: {black_details[1]}"
-            if notification_players_ranking:
-                message += f"\nClassement: {black_elo}"
-
-            logger.info(f"Match trouvé pour la ronde {round_number} :\n{message}")
-            return message, match_data
-
-    logger.warning(f"Joueur {player} non trouvé dans les lignes du tableau de la ronde {round_number}.")
-    return f"Joueur {player} non trouvé dans la ronde {round_number}.", {}
-
-
-def get_player_details(player_name: str) -> list[str]:
-    """Récupère [Catégorie, Club] d'un joueur."""
-    url = f"https://www.echecs.asso.fr/Resultats.aspx?URL=Tournois/Id/{tournament_id}/{tournament_id}&Action=Ls"
-    result = check_url(url)
-    if not result:
-        return ["Non trouvé", "Non trouvé"]
-
-    table = result.find("table", id="TablePage")
-    if not table:
-        return ["Non trouvé", "Non trouvé"]
-
-    clean_p = clean_text(player_name)
-    tokens = [w for w in clean_p.split() if len(w) > 2]
-
-    for row in table.find_all("tr")[1:]:
-        cells = [el.text.strip() for el in row.find_all("td")]
-        row_str = clean_text(" ".join(cells))
-        if len(cells) > 7 and all(t in row_str for t in tokens):
-            category = cells[4]
-            club = cells[7]
-            return [category, club]
-
-    return ["Non trouvé", "Non trouvé"]
-
-
-def get_ranking(round_num: int, type_rank: str = "full") -> str:
-    """Récupère le classement général."""
-    logger.info(f"Ranking type is: {type_rank}")
-    url = f"https://www.echecs.asso.fr/Resultats.aspx?URL=Tournois/Id/{tournament_id}/{tournament_id}&Action=Cl"
-
-    results = check_url(url)
-    if not results:
-        return "Erreur lors de la récupération du classement."
-
-    table = results.find("table", attrs={"id": "TablePage"})
-    if not table:
-        return "Tableau de classement non trouvé."
-
-    rows = []
-    for row in table.find_all("tr")[1:]:
-        rows.append([el.text.strip() for el in row.find_all("td")])
-
-    logger.info(f"Getting results for: {player}")
-    category = ""
-    message = ""
-
-    clean_p = clean_text(player)
-    tokens = [w for w in clean_p.split() if len(w) > 2]
-
-    for cell in rows:
-        cell_str = clean_text(" ".join(cell))
-        if len(cell) > 8 and all(t in cell_str for t in tokens):
-            global_ranking = cell[0]
-            category = cell[4]
-            points = cell[8]
-
-            logger.info(f"Player {player} FOUND in page: {url}")
-            message = f"Résultats pour {player} après la ronde {round_num}\n"
-
-            if type_rank == "light":
-                message += (
-                    f"Classement Général: {global_ranking}\nPoints: {points}\n\n"
-                )
-            else:
-                message += (
-                    f"Classement Général: {global_ranking}\n"
-                    f"Catégorie: {category}\n"
-                    f"Points: {points}\n\n"
-                )
-            break
-
-    if category:
-        logger.info(f"Getting category ranking for: {category}")
-        message += f"Classement pour catégorie {category}:\n"
-        row_number = 0
-        for cell in rows:
-            if len(cell) > 8 and category in cell:
-                row_number += 1
-                if type_rank == "light":
-                    message += f"{row_number}- {cell[2]} / Points: {cell[8]}\n"
-                else:
-                    message += (
-                        f"{row_number}- {cell[2]}\n"
-                        f"Classement Général: {cell[0]}\n"
-                        f"Club: {cell[7]}\n"
-                        f"Points: {cell[8]}\n\n"
-                    )
-
-    return message
-
+def update_player_status(t_id, player_name, current_round, status, t_name, match_info, round_history):
+    clean_player = player_name.replace(" ", "_")
+    status_file = os.path.join(DATA_DIR, f"status_{t_id}_{clean_player}.json")
+    
+    current_points = calculate_total_points(round_history)
+    data = {
+        "tournament_id": t_id,
+        "tournament_name": t_name,
+        "user": player_name,
+        "current_round": current_round,
+        "total_rounds": round_total,
+        "status": status,
+        "current_points": current_points,
+        "match_info": match_info,
+        "round_history": round_history,
+    }
+    try:
+        with open(status_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        logger.debug(f"[Cache/Status] Updated file {status_file} (Status: '{status}')")
+    except Exception as e:
+        logger.error(f"[Cache/Status] Error writing status for {player_name}: {e}")
 
 def tournament_name(tourn_id: str) -> str:
-    """Récupère le nom officiel du tournoi."""
     url = f"https://www.echecs.asso.fr/FicheTournoi.aspx?Ref={tourn_id}"
-    results = check_url(url)
-    if not results:
-        return "Tournoi inconnu"
+    soup = check_url(url)
+    if soup:
+        table = soup.find("table", id="ctl00_ContentPlaceHolderMain_TableTournoi")
+        if table and table.find("tr"):
+            name = table.find("tr").find("td").text.strip()
+            logger.info(f"[Tournament] Name identified: '{name}' (ID: {tourn_id})")
+            return name
+    return "Unknown Tournament"
 
-    table = results.find("table", id="ctl00_ContentPlaceHolderMain_TableTournoi")
-    if table:
-        first_row = table.find("tr")
-        if first_row and first_row.find("td"):
-            return first_row.find("td").text.strip()
-
-    return "Tournoi inconnu"
-
-
-# ---------------------------------------------------------------------------
-# MAIN EXECUTION
-# ---------------------------------------------------------------------------
-if __name__ == "__main__":
-    if is_dry_run:
-        logger.info("🧪 PROGRAMME DEMARRE EN MODE DRY-RUN (AUCUNE NOTIFICATION PUSHOVER NE SERA ENVOYEE)")
-
-    logger.info(
-        f"Starting program for tournament {tournament_id} ({round_total} rounds) for {player}. Starting round: {round_start}"
-    )
-
-    t_name = tournament_name(tournament_id)
+def catchup_player_history(p_name: str, p_cfg: dict, current_round: int, t_name: str) -> list:
+    """Fetches past rounds history for a player added mid-tournament."""
+    logger.info(f"[Catchup] Fetching history for rounds {round_start} to {current_round - 1} for '{p_name}'...")
+    
+    clean_p = clean_text(p_name)
+    tokens = [w for w in clean_p.split() if len(w) > 2]
     history = []
 
-    update_status(
-        current_round=round_start,
-        status="Initialisation",
-        t_name=t_name,
-        match_info=None,
-        round_history=history,
-    )
+    for past_round in range(round_start, current_round):
+        action_round = f"{past_round:02d}" if past_round < 10 else str(past_round)
+        url_past = f"https://www.echecs.asso.fr/Resultats.aspx?URL=Tournois/Id/{tournament_id}/{tournament_id}&Action={action_round}"
+        
+        soup = check_url(url_past)
+        if not soup:
+            continue
 
-    clean_player_slug = player.replace(" ", "")
-    mobile_path = f"/player/{tournament_id}/{clean_player_slug}"
+        table = soup.find("table", id="TablePage")
+        if not table:
+            continue
 
-    if server_url:
-        full_mobile_url = f"{server_url}{mobile_path}"
-    else:
-        full_mobile_url = mobile_path
+        for row in table.find_all("tr")[1:]:
+            row_cells = [el.text.strip() for el in row.find_all("td")]
+            row_str = clean_text(" ".join(row_cells))
 
-    start_msg = (
-        f"Notifications activées pour :\n"
-        f"Nom du tournoi : {t_name}\n"
-        f"Joueur : {player}\n"
-        f"Nombre de rondes : {round_total}"
-    )
-    logger.info(start_msg)
+            if all(t in row_str for t in tokens):
+                table_num = row_cells[0]
+                white_player = row_cells[2]
+                black_player = row_cells[5] if len(row_cells) > 5 else ""
 
-    push_over(
-        start_msg,
-        url=full_mobile_url,
-        url_title="📱 Consulter la page de suivi mobile",
-    )
+                is_white = all(t in clean_text(white_player) for t in tokens)
+                color = "Blancs" if is_white else "Noirs"
+                opponent = black_player if is_white else white_player
 
-    for rondeNumber in range(round_start, int(round_total) + 1):
-        logger.info(f"Checking Round: {rondeNumber}")
+                result = "En cours"
+                if "1 - 0" in row_str or "1-0" in row_str:
+                    result = "1 - 0" if is_white else "0 - 1"
+                elif "0 - 1" in row_str or "0-1" in row_str:
+                    result = "0 - 1" if is_white else "1 - 0"
+                elif "1/2" in row_str or "½" in row_str or "x - x" in row_str or "x-x" in row_str:
+                    result = "½ - ½"
 
-        update_status(
-            current_round=rondeNumber,
-            status="En attente des appariements",
-            t_name=t_name,
-            match_info=None,
-            round_history=history,
+                match_data = {
+                    "round": past_round,
+                    "table": table_num,
+                    "opponent": opponent,
+                    "color": color,
+                    "result": result
+                }
+                history.append(match_data)
+                logger.info(f"[Catchup] Round {past_round} found for {p_name}: {color} vs {opponent} ({result})")
+                break
+
+    if history:
+        pts = calculate_total_points(history)
+        msg_catchup = (
+            f"Tracking activated for {p_name}!\n"
+            f"Caught up rounds: {len(history)}\n"
+            f"Current score: {format_points(pts)} pt(s)"
         )
+        clean_slug = p_name.replace(" ", "")
+        mobile_url = f"{p_cfg.get('SERVER_URL')}/tournament/{tournament_id}/{clean_slug}"
+        push_over(p_cfg, msg_catchup, url=mobile_url)
 
-        msg_round, match_data = check_round(rondeNumber)
+    return history
 
-        if match_data:
-            history.append(match_data)
+# ---------------------------------------------------------------------------
+# MAIN WORKER LOOP
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    t_name = tournament_name(tournament_id)
+    logger.info(f"[Worker] Starting centralized worker for Tournament ID {tournament_id} ({t_name}) - Rounds {round_start} to {round_total}")
 
-        # Ajout des points cumulés actuels au message de ronde
-        current_pts = calculate_total_points(history[:-1])
-        msg_round = f"Points en cours: {format_points(current_pts)} pt(s)\n\n" + msg_round
+    players_state = {}
 
-        update_status(
-            current_round=rondeNumber,
-            status="Match en cours",
-            t_name=t_name,
-            match_info=match_data,
-            round_history=history,
-        )
+    for round_num in range(round_start, round_total + 1):
+        logger.info(f"===========================================================")
+        logger.info(f"[Worker] START TRACKING ROUND {round_num} / {round_total}")
+        logger.info(f"===========================================================")
+        
+        for p_name in players_state:
+            players_state[p_name]["pairing_sent"] = False
+            players_state[p_name]["result_sent"] = False
 
-        if rondeNumber > 1:
-            msg_round += "\n\n" + get_ranking(rondeNumber - 1, "light")
+        action_round = f"{round_num:02d}" if round_num < 10 else str(round_num)
+        url_round = f"https://www.echecs.asso.fr/Resultats.aspx?URL=Tournois/Id/{tournament_id}/{tournament_id}&Action={action_round}"
 
-        logger.info(f"Sending message for round {rondeNumber}:\n{msg_round}")
-        push_over(msg_round)
+        round_completed_for_all = False
 
-        # ⚡ SUIVI EN DIRECT DU RESULTAT
-        round_res = wait_for_round_result(rondeNumber)
-        if history:
-            history[-1]["result"] = round_res
+        while not round_completed_for_all:
+            subs = load_subscriptions()
+            tracked_players = subs.get("players", {})
 
-        total_pts = calculate_total_points(history)
-        res_msg = (
-            f"Ronde {rondeNumber} - Résultat de la partie :\n"
-            f"Score : {round_res}\n"
-            f"Match : {match_data.get('color', '')} vs {match_data.get('opponent', '')}\n\n"
-            f"📊 Nouveau total : {format_points(total_pts)} pt(s)"
-        )
-        push_over(res_msg)
+            if not tracked_players:
+                logger.info("[Worker] No active subscriptions for this tournament. Stopping worker.")
+                exit(0)
 
-        update_status(
-            current_round=rondeNumber,
-            status="Partie terminée",
-            t_name=t_name,
-            match_info=match_data,
-            round_history=history,
-        )
+            for p_name, p_cfg in tracked_players.items():
+                if p_name not in players_state:
+                    logger.info(f"[Subscriptions] Registering new subscribed player: '{p_name}'")
+                    
+                    past_history = []
+                    if round_num > round_start:
+                        past_history = catchup_player_history(p_name, p_cfg, round_num, t_name)
 
-    logger.info(f"Round {round_total} finished. Fetching final results...")
-    
-    update_status(
-        current_round=int(round_total),
-        status="Terminé",
-        t_name=t_name,
-        match_info=None,
-        round_history=history,
-    )
+                    players_state[p_name] = {
+                        "history": past_history,
+                        "pairing_sent": False,
+                        "result_sent": False,
+                        "match_data": None
+                    }
 
-    final_ranking_msg = get_ranking(int(round_total), "full")
-    logger.info(f"Final message:\n{final_ranking_msg}")
-    push_over(final_ranking_msg)
+            logger.info(f"[Scraper] Centralized fetch for Round {round_num} for {len(tracked_players)} subscriber(s)...")
+            soup = check_url(url_round)
+            table_rows = []
+            if soup:
+                table = soup.find("table", id="TablePage")
+                if table:
+                    table_rows = table.find_all("tr")[1:]
+
+            all_pairings_found = True
+            all_results_found = True
+            any_game_in_progress = False
+
+            for p_name, p_cfg in list(tracked_players.items()):
+                state = players_state[p_name]
+                clean_p = clean_text(p_name)
+                tokens = [w for w in clean_p.split() if len(w) > 2]
+
+                player_row = None
+                for row in table_rows:
+                    row_text = clean_text(row.text)
+                    if all(t in row_text for t in tokens):
+                        player_row = [el.text.strip() for el in row.find_all("td")]
+                        break
+
+                if not player_row:
+                    all_pairings_found = False
+                    all_results_found = False
+                    logger.debug(f"[Player] Pairings not yet published for {p_name} (Round {round_num})")
+                    update_player_status(tournament_id, p_name, round_num, "En attente des appariements", t_name, None, state["history"])
+                    continue
+
+                table_num = player_row[0]
+                white_player = player_row[2]
+                black_player = player_row[5] if len(player_row) > 5 else ""
+                
+                is_white = all(t in clean_text(white_player) for t in tokens)
+                color = "Blancs" if is_white else "Noirs"
+                opponent = black_player if is_white else white_player
+
+                row_str = " ".join([clean_text(x) for x in player_row])
+                result = "En cours"
+                if "1 - 0" in row_str or "1-0" in row_str:
+                    result = "1 - 0" if is_white else "0 - 1"
+                elif "0 - 1" in row_str or "0-1" in row_str:
+                    result = "0 - 1" if is_white else "1 - 0"
+                elif "1/2" in row_str or "½" in row_str or "x - x" in row_str or "x-x" in row_str:
+                    result = "½ - ½"
+
+                match_data = {
+                    "round": round_num,
+                    "table": table_num,
+                    "opponent": opponent,
+                    "color": color,
+                    "result": result
+                }
+                state["match_data"] = match_data
+
+                if not state["pairing_sent"]:
+                    state["pairing_sent"] = True
+                    logger.info(f"[Pairings] Pairing found for {p_name} (Board {table_num}, {color} vs {opponent})")
+                    msg = f"Ronde {round_num} - Echiquier {table_num}\nJoueur: {p_name}\nCouleur: {color}\nAdversaire: {opponent}"
+                    clean_slug = p_name.replace(" ", "")
+                    mobile_url = f"{p_cfg.get('SERVER_URL')}/tournament/{tournament_id}/{clean_slug}"
+                    push_over(p_cfg, msg, url=mobile_url)
+
+                if result == "En cours":
+                    all_results_found = False
+                    any_game_in_progress = True
+                    update_player_status(tournament_id, p_name, round_num, "Match en cours", t_name, match_data, state["history"])
+                else:
+                    if not state["result_sent"]:
+                        state["result_sent"] = True
+                        state["history"].append(match_data)
+                        pts = calculate_total_points(state["history"])
+                        logger.info(f"[Results] Result published for {p_name}: {result} (New score: {format_points(pts)} pts)")
+                        res_msg = f"Ronde {round_num} Terminée pour {p_name} !\nRésultat: {result}\nNouveau total: {format_points(pts)} pt(s)"
+                        push_over(p_cfg, res_msg)
+
+                    update_player_status(tournament_id, p_name, round_num, "Partie terminée", t_name, match_data, state["history"])
+
+            if all_pairings_found and all_results_found:
+                round_completed_for_all = True
+                logger.info(f"[Round {round_num}] Round fully completed for all tournament subscribers.")
+                break
+
+            if not all_pairings_found:
+                sleep_time = INTERVAL_WAIT_PAIRINGS
+                reason = "Waiting for pairings publication"
+            elif any_game_in_progress:
+                sleep_time = INTERVAL_GAME_IN_PROGRESS
+                reason = "Games in progress (request saving mode)"
+            else:
+                sleep_time = INTERVAL_CHECK_RESULT
+                reason = "Waiting for results publication"
+
+            logger.info(f"[Adaptive Polling] Pausing for {sleep_time}s ({reason})")
+            time.sleep(sleep_time)
+
+    logger.info(f"[Worker] Tournament ID {tournament_id} completely finished!")

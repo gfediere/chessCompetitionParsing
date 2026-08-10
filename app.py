@@ -1,5 +1,6 @@
 import glob
 import json
+import logging
 import os
 import re
 import subprocess
@@ -10,24 +11,32 @@ from bs4 import BeautifulSoup
 from flask import Flask, flash, redirect, render_template, request, url_for
 from dotenv import load_dotenv
 
-# Chargement automatique des variables d'environnement depuis le fichier .env
 load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
 
+log_level_str = os.getenv("logLevel", "INFO").upper()
+log_level = getattr(logging, log_level_str, logging.INFO)
+
+logging.basicConfig(
+    level=log_level,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    force=True
+)
+logger = logging.getLogger("chessBotController")
+
 active_bots = {}
 
-# Dossier de stockage fixe sous ./data
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
-os.makedirs(DATA_DIR, exist_ok=True)
+SUBSCRIPTIONS_DIR = os.path.join(BASE_DIR, "subscriptions")
 
-# ---------------------------------------------------------------------------
-# HELPER DE NETTOYAGE D'ENCODAGE & TEXTE & CALCUL DE POINTS
-# ---------------------------------------------------------------------------
+os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(SUBSCRIPTIONS_DIR, exist_ok=True)
+
+
 def clean_text(text: str) -> str:
-    """Nettoie les espaces insécables, accents et espaces superflus."""
     if not text:
         return ""
     text = unicodedata.normalize("NFKD", text).replace("\xa0", " ")
@@ -35,7 +44,6 @@ def clean_text(text: str) -> str:
 
 
 def calculate_total_points(round_history: list) -> float:
-    """Calcule le total cumulé de points à partir de l'historique."""
     total = 0.0
     for item in round_history:
         res = item.get("result", "")
@@ -49,14 +57,12 @@ def calculate_total_points(round_history: list) -> float:
 
 
 def format_points(points: float) -> str:
-    """Formate le score proprement (ex: 2.5 au lieu de 2.50)."""
     if points.is_integer():
         return f"{int(points)}"
     return f"{points}"
 
 
 def fetch_live_result(t_id, round_num, player_name):
-    """Consulte directement la page de la ronde (Action=0N) comme pour les autres rondes."""
     action_round = f"{round_num:02d}" if round_num < 10 else str(round_num)
     url = f"https://www.echecs.asso.fr/Resultats.aspx?URL=Tournois/Id/{t_id}/{t_id}&Action={action_round}"
     
@@ -91,13 +97,34 @@ def fetch_live_result(t_id, round_num, player_name):
     return "En cours"
 
 
-# ---------------------------------------------------------------------------
-# LOGIQUE ET ROUTES FLASK
-# ---------------------------------------------------------------------------
+def clean_dead_processes():
+    to_remove = [t_id for t_id, p in active_bots.items() if p.poll() is not None]
+    for t_id in to_remove:
+        logger.info(f"[Process] Tournament worker {t_id} finished. Cleaning up.")
+        del active_bots[t_id]
+
+
+def get_tournament_subscription(t_id):
+    sub_file = os.path.join(SUBSCRIPTIONS_DIR, f"sub_{t_id}.json")
+    if os.path.exists(sub_file):
+        try:
+            with open(sub_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Error reading {sub_file}: {e}")
+    return {"tournament_id": t_id, "players": {}}
+
+
+def save_tournament_subscription(t_id, data):
+    sub_file = os.path.join(SUBSCRIPTIONS_DIR, f"sub_{t_id}.json")
+    with open(sub_file, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    logger.info(f"[Subscriptions] Subscription file {sub_file} updated.")
+
 
 def get_statuses():
-    """Lit tous les fichiers status_*.json dans DATA_DIR."""
     statuses = {}
+    
     pattern = os.path.join(DATA_DIR, "status_*.json")
     for filepath in glob.glob(pattern):
         try:
@@ -105,25 +132,41 @@ def get_statuses():
                 data = json.load(f)
                 t_id = str(data.get("tournament_id", "")).strip()
                 user_name = str(data.get("user", "")).strip()
-
                 bot_key = f"{t_id}___{user_name}"
                 statuses[bot_key] = data
         except Exception:
             continue
+
+    sub_pattern = os.path.join(SUBSCRIPTIONS_DIR, "sub_*.json")
+    for sub_file in glob.glob(sub_pattern):
+        try:
+            with open(sub_file, "r", encoding="utf-8") as f:
+                sub_data = json.load(f)
+                t_id = str(sub_data.get("tournament_id", "")).strip()
+                for user_name in sub_data.get("players", {}):
+                    bot_key = f"{t_id}___{user_name}"
+                    if bot_key not in statuses:
+                        statuses[bot_key] = {
+                            "tournament_id": t_id,
+                            "tournament_name": "Initialisation du tournoi...",
+                            "user": user_name,
+                            "current_round": 1,
+                            "total_rounds": "?",
+                            "status": "Démarrage du worker en cours...",
+                            "current_points": 0.0,
+                            "match_info": None,
+                            "round_history": []
+                        }
+        except Exception:
+            continue
+
     return statuses
-
-
-def clean_dead_processes():
-    to_remove = [k for k, p in active_bots.items() if p.poll() is not None]
-    for k in to_remove:
-        del active_bots[k]
 
 
 @app.route("/")
 def index():
     clean_dead_processes()
     statuses = get_statuses()
-    
     defaults = {
         "tournament_id": os.getenv("tournament_id", ""),
         "user": os.getenv("user", ""),
@@ -134,35 +177,60 @@ def index():
         "pushover_user_key": os.getenv("pushover_user_key", ""),
         "dry_run": os.getenv("dry_run", "False"),
     }
-
-    return render_template(
-        "index.html",
-        active_bots=active_bots,
-        statuses=statuses,
-        defaults=defaults,
-    )
+    return render_template("index.html", active_bots=active_bots, statuses=statuses, defaults=defaults)
 
 
-@app.route("/player/<tournament_id>/<player_slug>")
+@app.route("/tournament/<tournament_id>/<player_slug>")
 def player_view_slug(tournament_id, player_slug):
-    statuses = get_statuses()
     status_info = {}
-    found_player_name = player_slug
+    found_player_name = None
     target_filepath = None
 
-    for bot_key, data in statuses.items():
-        t_id = bot_key.split("___")[0]
-        p_name = bot_key.split("___")[1]
-        
-        if t_id == tournament_id and p_name.replace(" ", "") == player_slug:
-            status_info = data
-            found_player_name = p_name
-            clean_player = p_name.replace(" ", "_")
-            target_filepath = os.path.join(DATA_DIR, f"status_{t_id}_{clean_player}.json")
-            break
+    data_files = glob.glob(os.path.join(DATA_DIR, "status_*.json"))
+    for filepath in data_files:
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                t_id = str(data.get("tournament_id", "")).strip()
+                p_name = str(data.get("user", "")).strip()
+                clean_p_name = p_name.replace(" ", "")
 
-    # RAFRAÎCHISSEMENT EN DIRECT : Consulte la page de la ronde si une partie est 'En cours'
-    if status_info and target_filepath:
+                if t_id == str(tournament_id).strip() and clean_p_name == player_slug:
+                    status_info = data
+                    found_player_name = p_name
+                    target_filepath = filepath
+                    break
+        except Exception:
+            continue
+
+    if not status_info:
+        sub = get_tournament_subscription(tournament_id)
+        for p_name in sub.get("players", {}):
+            clean_p_name = p_name.replace(" ", "")
+            if clean_p_name == player_slug:
+                found_player_name = p_name
+                status_info = {
+                    "tournament_id": tournament_id,
+                    "tournament_name": "Initialisation du tournoi...",
+                    "user": p_name,
+                    "current_round": 1,
+                    "total_rounds": "?",
+                    "status": "En attente du premier passage du worker...",
+                    "current_points": 0.0,
+                    "match_info": None,
+                    "round_history": []
+                }
+                break
+
+    if not found_player_name:
+        return render_template(
+            "player_mobile.html",
+            player=player_slug,
+            status_info={"status": "Joueur ou tournoi introuvable"},
+            points_display="0"
+        ), 404
+
+    if target_filepath and os.path.exists(target_filepath):
         history = status_info.get("round_history", [])
         updated = False
         for item in history:
@@ -177,8 +245,8 @@ def player_view_slug(tournament_id, player_slug):
             try:
                 with open(target_filepath, "w", encoding="utf-8") as f:
                     json.dump(status_info, f, ensure_ascii=False)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error(f"Error writing live update: {e}")
 
     history = status_info.get("round_history", [])
     total_pts = calculate_total_points(history)
@@ -198,47 +266,60 @@ def start():
 
     tournament_id = request.form.get("tournament_id", "").strip()
     user = request.form.get("user", "").strip()
-    bot_key = f"{tournament_id}___{user}"
 
-    if bot_key in active_bots:
-        flash(f"Un suivi tourne déjà pour {user} sur le tournoi {tournament_id} !")
-        return redirect(url_for("index"))
-
-    data = {
-        "tournament_id": tournament_id,
-        "user": user,
-        "SERVER_URL": request.form.get("SERVER_URL", "https://chess-bot.fedallica.fr").strip(),
-        "rounds": request.form.get("rounds", "7").strip(),
-        "round_start": request.form.get("round_start", "1").strip(),
+    sub = get_tournament_subscription(tournament_id)
+    sub["tournament_id"] = tournament_id
+    sub["players"][user] = {
+        "name": user,
         "pushover_app_token": request.form.get("pushover_app_token", "").strip(),
         "pushover_user_key": request.form.get("pushover_user_key", "").strip(),
-        "logLevel": request.form.get("logLevel", "INFO"),
+        "SERVER_URL": request.form.get("SERVER_URL", "https://chess-bot.fedallica.fr").strip(),
+        "dry_run": bool(request.form.get("dry_run"))
     }
+    save_tournament_subscription(tournament_id, sub)
 
-    if request.form.get("dry_run"):
-        data["dry_run"] = "True"
-        data["dry-run"] = "True"
+    if tournament_id not in active_bots:
+        env_child = os.environ.copy()
+        env_child.update({
+            "tournament_id": tournament_id,
+            "rounds": request.form.get("rounds", "7").strip(),
+            "round_start": request.form.get("round_start", "1").strip(),
+            "logLevel": request.form.get("logLevel", "INFO"),
+        })
 
-    env_child = os.environ.copy()
-    env_child.update(data)
+        proc = subprocess.Popen([sys.executable, "run.py"], env=env_child)
+        active_bots[tournament_id] = proc
+        logger.info(f"[Process] New worker started (PID {proc.pid}) for Tournament ID {tournament_id}")
+        flash(f"Suivi démarré pour {user} (Worker lancé pour le tournoi {tournament_id})")
+    else:
+        logger.info(f"[Process] Player '{user}' added to active worker for tournament {tournament_id} (PID {active_bots[tournament_id].pid})")
+        flash(f"Joueur {user} ajouté au worker du tournoi {tournament_id} déjà en cours !")
 
-    proc = subprocess.Popen([sys.executable, "run.py"], env=env_child)
-    active_bots[bot_key] = proc
-
-    flash(f"Suivi démarré pour {user} (Tournoi {tournament_id})")
     return redirect(url_for("index"))
 
 
 @app.route("/stop", methods=["POST"])
 def stop():
     bot_key = request.form.get("bot_key")
-    if bot_key in active_bots:
-        proc = active_bots[bot_key]
-        if proc.poll() is None:
-            proc.terminate()
-        del active_bots[bot_key]
+    if bot_key and "___" in bot_key:
+        t_id, user = bot_key.split("___", 1)
 
-        flash("Suivi arrêté. L'historique reste disponible !")
+        sub = get_tournament_subscription(t_id)
+        if user in sub.get("players", {}):
+            del sub["players"][user]
+            save_tournament_subscription(t_id, sub)
+            logger.info(f"[Subscriptions] Player '{user}' removed from tournament {t_id}")
+
+        if not sub.get("players") and t_id in active_bots:
+            proc = active_bots[t_id]
+            if proc.poll() is None:
+                proc.terminate()
+                logger.info(f"[Process] No remaining subscribers for tournament {t_id}. Worker (PID {proc.pid}) stopped.")
+            del active_bots[t_id]
+            flash(f"Dernier joueur retiré. Worker du tournoi {t_id} arrêté.")
+        else:
+            flash(f"Suivi de {user} arrêté pour le tournoi {t_id}.")
+
     return redirect(url_for("index"))
 
 

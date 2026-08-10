@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="refresh" content="10">
     <title>FFE Chess Bot Controller</title>
     <style>
         body { font-family: system-ui, sans-serif; background: #f4f6f8; margin: 0; padding: 20px; display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; }
@@ -83,45 +84,46 @@
     </div>
 
     <div class="card">
-        <h2>📊 Suivis en cours ({{ active_bots|length }})</h2>
+        <h2>📊 Suivis en cours ({{ active_bots|length }} worker(s) actif(s))</h2>
         {% if not active_bots %}
             <p style="color: #777;">Aucun suivi actif actuellement.</p>
         {% else %}
-            {% for bot_key, process in active_bots.items() %}
-                {% set status_info = statuses.get(bot_key, {}) %}
-                {% set match = status_info.get('match_info') %}
-                {% set t_id = bot_key.split('___')[0] %}
-                {% set player_name = bot_key.split('___')[1] %}
-                {% set clean_url_name = player_name.replace(' ', '') %}
-                
-                <div class="bot-item">
-                    <div>
-                        <strong>👤 {{ player_name }}</strong><br>
-                        <span class="tournament-title">🏆 {{ status_info.get('tournament_name', 'Chargement du nom...') }}</span><br>
-                        <small style="color: #666;">ID Tournoi: {{ t_id }}</small><br>
-                        
-                        <span class="badge">
-                            Ronde {{ status_info.get('current_round', '?') }} / {{ status_info.get('total_rounds', '?') }}
-                        </span>
+            {% for bot_key, data in statuses.items() %}
+                {% set t_id = data.get('tournament_id') %}
+                {% if t_id in active_bots %}
+                    {% set match = data.get('match_info') %}
+                    {% set player_name = data.get('user') %}
+                    {% set clean_url_name = player_name.replace(' ', '') %}
+                    
+                    <div class="bot-item">
+                        <div>
+                            <strong>👤 {{ player_name }}</strong><br>
+                            <span class="tournament-title">🏆 {{ data.get('tournament_name', 'Chargement du nom...') }}</span><br>
+                            <small style="color: #666;">ID Tournoi: {{ t_id }}</small><br>
+                            
+                            <span class="badge">
+                                Ronde {{ data.get('current_round', '?') }} / {{ data.get('total_rounds', '?') }}
+                            </span>
 
-                        {% if match and match.get('opponent') %}
-                            <div class="match-details">
-                                <strong>Table {{ match.get('table') }}</strong> ({{ '♔ Blancs' if match.get('color') == 'Blancs' else '♚ Noirs' }})<br>
-                                vs 👥 <em>{{ match.get('opponent') }}</em>
-                            </div>
-                        {% else %}
-                            <div style="font-size: 12px; color: #888; margin-top: 6px;">
-                                ⏳ {{ status_info.get('status', 'En attente des appariements') }}
-                            </div>
-                        {% endif %}
+                            {% if match and match.get('opponent') %}
+                                <div class="match-details">
+                                    <strong>Table {{ match.get('table') }}</strong> ({{ '♔ Blancs' if match.get('color') == 'Blancs' else '♚ Noirs' }})<br>
+                                    vs 👥 <em>{{ match.get('opponent') }}</em>
+                                </div>
+                            {% else %}
+                                <div style="font-size: 12px; color: #888; margin-top: 6px;">
+                                    ⏳ {{ data.get('status', 'En attente des appariements') }}
+                                </div>
+                            {% endif %}
 
-                        <a href="/player/{{ t_id }}/{{ clean_url_name }}" target="_blank" class="mobile-btn">📱 Lien Mobile</a>
+                            <a href="/tournament/{{ t_id }}/{{ clean_url_name }}" target="_blank" class="mobile-btn">📱 Lien Mobile</a>
+                        </div>
+                        <form method="POST" action="/stop" style="margin: 0;">
+                            <input type="hidden" name="bot_key" value="{{ bot_key }}">
+                            <button type="submit" class="stop-btn">Arrêter</button>
+                        </form>
                     </div>
-                    <form method="POST" action="/stop" style="margin: 0;">
-                        <input type="hidden" name="bot_key" value="{{ bot_key }}">
-                        <button type="submit" class="stop-btn">Arrêter</button>
-                    </form>
-                </div>
+                {% endif %}
             {% endfor %}
         {% endif %}
 
@@ -130,8 +132,8 @@
             <p style="color: #888; font-size: 13px;">Aucun historique sauvegardé.</p>
         {% else %}
             {% for bot_key, data in statuses.items() %}
-                {% if bot_key not in active_bots %}
-                    {% set t_id = data.get('tournament_id') %}
+                {% set t_id = data.get('tournament_id') %}
+                {% if t_id not in active_bots %}
                     {% set player_name = data.get('user') %}
                     {% set clean_url_name = player_name.replace(' ', '') %}
                     <div class="archive-item">
@@ -139,7 +141,7 @@
                             <strong>{{ player_name }}</strong><br>
                             <small style="color: #666;">{{ data.get('tournament_name') }} (ID: {{ t_id }})</small>
                         </div>
-                        <a href="/player/{{ t_id }}/{{ clean_url_name }}" target="_blank" class="mobile-btn">📱 Voir Fiche</a>
+                        <a href="/tournament/{{ t_id }}/{{ clean_url_name }}" target="_blank" class="mobile-btn">📱 Voir Fiche</a>
                     </div>
                 {% endif %}
             {% endfor %}
