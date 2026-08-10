@@ -172,12 +172,36 @@ def index():
         "user": os.getenv("user", ""),
         "SERVER_URL": os.getenv("SERVER_URL", "https://chess-bot.fedallica.fr"),
         "rounds": os.getenv("rounds", "7"),
-        "round_start": os.getenv("round_start", "1"),
         "pushover_app_token": os.getenv("pushover_app_token", ""),
         "pushover_user_key": os.getenv("pushover_user_key", ""),
         "dry_run": os.getenv("dry_run", "False"),
     }
     return render_template("index.html", active_bots=active_bots, statuses=statuses, defaults=defaults)
+
+
+@app.route("/api/active_bots")
+def api_active_bots():
+    clean_dead_processes()
+    statuses = get_statuses()
+    active_data = []
+
+    for bot_key, data in statuses.items():
+        t_id = data.get("tournament_id")
+        if t_id in active_bots:
+            player_name = data.get("user", "")
+            active_data.append({
+                "bot_key": bot_key,
+                "tournament_id": t_id,
+                "tournament_name": data.get("tournament_name", "Chargement du nom..."),
+                "user": player_name,
+                "clean_url_name": player_name.replace(" ", ""),
+                "current_round": data.get("current_round", "?"),
+                "total_rounds": data.get("total_rounds", "?"),
+                "status": data.get("status", "En attente des appariements"),
+                "match": data.get("match_info")
+            })
+
+    return {"active_bots_count": len(active_bots), "bots": active_data}
 
 
 @app.route("/tournament/<tournament_id>/<player_slug>")
@@ -267,12 +291,17 @@ def start():
     tournament_id = request.form.get("tournament_id", "").strip()
     user = request.form.get("user", "").strip()
 
+    provider = request.form.get("notification_provider", "none").strip()
+    enable_pushover = (provider == "pushover")
+
     sub = get_tournament_subscription(tournament_id)
     sub["tournament_id"] = tournament_id
     sub["players"][user] = {
         "name": user,
-        "pushover_app_token": request.form.get("pushover_app_token", "").strip(),
-        "pushover_user_key": request.form.get("pushover_user_key", "").strip(),
+        "notification_provider": provider,
+        "enable_pushover": enable_pushover,
+        "pushover_app_token": request.form.get("pushover_app_token", "").strip() if enable_pushover else "",
+        "pushover_user_key": request.form.get("pushover_user_key", "").strip() if enable_pushover else "",
         "SERVER_URL": request.form.get("SERVER_URL", "https://chess-bot.fedallica.fr").strip(),
         "dry_run": bool(request.form.get("dry_run"))
     }
@@ -283,7 +312,6 @@ def start():
         env_child.update({
             "tournament_id": tournament_id,
             "rounds": request.form.get("rounds", "7").strip(),
-            "round_start": request.form.get("round_start", "1").strip(),
             "logLevel": request.form.get("logLevel", "INFO"),
         })
 

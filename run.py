@@ -30,7 +30,7 @@ INTERVAL_CHECK_RESULT = 30      # 30s when waiting for results publication
 
 tournament_id = os.environ.get("tournament_id")
 round_total = int(os.environ.get("rounds", 7))
-round_start = int(os.environ.get("round_start", 1))
+round_start = 1                 # Toujours démarrer à la ronde 1
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")                   # Player status files
@@ -81,6 +81,18 @@ def load_subscriptions() -> dict:
 
 def push_over(player_cfg: dict, message: str, url: str = None, url_title: str = None):
     player_name = player_cfg.get("name", "Unknown")
+
+    if not player_cfg.get("enable_pushover", True):
+        logger.debug(f"[Pushover] Notifications disabled for {player_name}. Skipping.")
+        return
+
+    app_token = player_cfg.get("pushover_app_token")
+    user_key = player_cfg.get("pushover_user_key")
+
+    if not app_token or not user_key:
+        logger.debug(f"[Pushover] Missing token or user key for {player_name}. Skipping notification.")
+        return
+
     if player_cfg.get("dry_run", False):
         logger.info(f"[DRY RUN] Pushover notification not sent to {player_name}:\n--- MESSAGE ---\n{message}\nURL: {url}\n---------------")
         return
@@ -88,8 +100,8 @@ def push_over(player_cfg: dict, message: str, url: str = None, url_title: str = 
     try:
         conn = http.client.HTTPSConnection("api.pushover.net:443")
         payload_data = {
-            "token": player_cfg.get("pushover_app_token"),
-            "user": player_cfg.get("pushover_user_key"),
+            "token": app_token,
+            "user": user_key,
             "message": message,
         }
         if url:
@@ -157,7 +169,7 @@ def tournament_name(tourn_id: str) -> str:
 
 def catchup_player_history(p_name: str, p_cfg: dict, current_round: int, t_name: str) -> list:
     """Fetches past rounds history for a player added mid-tournament."""
-    logger.info(f"[Catchup] Fetching history for rounds {round_start} to {current_round - 1} for '{p_name}'...")
+    logger.info(f"[Catchup] Fetching history for rounds 1 to {current_round - 1} for '{p_name}'...")
     
     clean_p = clean_text(p_name)
     tokens = [w for w in clean_p.split() if len(w) > 2]
@@ -225,7 +237,7 @@ def catchup_player_history(p_name: str, p_cfg: dict, current_round: int, t_name:
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     t_name = tournament_name(tournament_id)
-    logger.info(f"[Worker] Starting centralized worker for Tournament ID {tournament_id} ({t_name}) - Rounds {round_start} to {round_total}")
+    logger.info(f"[Worker] Starting centralized worker for Tournament ID {tournament_id} ({t_name}) - Rounds 1 to {round_total}")
 
     players_state = {}
 

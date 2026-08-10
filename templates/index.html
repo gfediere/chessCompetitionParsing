@@ -3,7 +3,6 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="refresh" content="10">
     <title>FFE Chess Bot Controller</title>
     <style>
         body { font-family: system-ui, sans-serif; background: #f4f6f8; margin: 0; padding: 20px; display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; }
@@ -25,6 +24,7 @@
         .match-details { margin-top: 6px; padding: 6px 8px; background: #eef4fc; border-left: 3px solid #007bff; border-radius: 4px; font-size: 13px; color: #333; }
         .badge { display: inline-block; padding: 4px 10px; background: #007bff; color: white; border-radius: 12px; font-size: 12px; font-weight: bold; margin-top: 6px; }
         .archive-item { padding: 10px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
+        .notification-options { background: #f8f9fa; border: 1px solid #e9ecef; padding: 12px; border-radius: 6px; margin-top: 8px; display: none; }
     </style>
 </head>
 <body>
@@ -55,28 +55,38 @@
                 <label>Nombre de rondes (rounds)</label>
                 <input type="number" name="rounds" value="{{ defaults.rounds }}" required>
             </div>
+
+            <!-- MENU DÉROULANT DES NOTIFICATIONS -->
             <div class="form-group">
-                <label>Ronde de départ (round_start)</label>
-                <input type="number" name="round_start" value="{{ defaults.round_start }}" required>
+                <label>Activer les notifications</label>
+                <select name="notification_provider" id="notification_provider" onchange="toggleNotificationProvider(this.value)">
+                    <option value="none">Désactivées</option>
+                    <option value="pushover">Pushover</option>
+                </select>
             </div>
-            <div class="form-group">
-                <label>Pushover App Token</label>
-                <input type="text" name="pushover_app_token" value="{{ defaults.pushover_app_token }}" required>
+
+            <!-- OPTIONS PUSHOVER -->
+            <div id="pushover_options" class="notification-options">
+                <div class="form-group">
+                    <label>Pushover App Token</label>
+                    <input type="text" id="pushover_app_token" name="pushover_app_token" value="{{ defaults.pushover_app_token }}">
+                </div>
+                <div class="form-group">
+                    <label>Pushover User Key</label>
+                    <input type="text" id="pushover_user_key" name="pushover_user_key" value="{{ defaults.pushover_user_key }}">
+                </div>
+                <div class="checkbox-group" style="margin-top: 8px;">
+                    <input type="checkbox" id="dry_run" name="dry_run" value="True" {% if defaults.dry_run == 'True' %}checked{% endif %}>
+                    <label for="dry_run">Mode Simulation (dry-run)</label>
+                </div>
             </div>
-            <div class="form-group">
-                <label>Pushover User Key</label>
-                <input type="text" name="pushover_user_key" value="{{ defaults.pushover_user_key }}" required>
-            </div>
-            <div class="form-group">
+
+            <div class="form-group" style="margin-top: 12px;">
                 <label>Niveau de Log</label>
                 <select name="logLevel">
                     <option value="INFO">INFO</option>
                     <option value="DEBUG">DEBUG</option>
                 </select>
-            </div>
-            <div class="checkbox-group">
-                <input type="checkbox" id="dry_run" name="dry_run" value="True" {% if defaults.dry_run == 'True' %}checked{% endif %}>
-                <label for="dry_run">Mode Simulation (dry-run)</label>
             </div>
 
             <button type="submit">🚀 Lancer ce suivi</button>
@@ -84,48 +94,50 @@
     </div>
 
     <div class="card">
-        <h2>📊 Suivis en cours ({{ active_bots|length }} worker(s) actif(s))</h2>
-        {% if not active_bots %}
-            <p style="color: #777;">Aucun suivi actif actuellement.</p>
-        {% else %}
-            {% for bot_key, data in statuses.items() %}
-                {% set t_id = data.get('tournament_id') %}
-                {% if t_id in active_bots %}
-                    {% set match = data.get('match_info') %}
-                    {% set player_name = data.get('user') %}
-                    {% set clean_url_name = player_name.replace(' ', '') %}
-                    
-                    <div class="bot-item">
-                        <div>
-                            <strong>👤 {{ player_name }}</strong><br>
-                            <span class="tournament-title">🏆 {{ data.get('tournament_name', 'Chargement du nom...') }}</span><br>
-                            <small style="color: #666;">ID Tournoi: {{ t_id }}</small><br>
-                            
-                            <span class="badge">
-                                Ronde {{ data.get('current_round', '?') }} / {{ data.get('total_rounds', '?') }}
-                            </span>
+        <h2 id="active-bots-title">📊 Suivis en cours ({{ active_bots|length }} worker(s) actif(s))</h2>
+        <div id="active-bots-container">
+            {% if not active_bots %}
+                <p style="color: #777;">Aucun suivi actif actuellement.</p>
+            {% else %}
+                {% for bot_key, data in statuses.items() %}
+                    {% set t_id = data.get('tournament_id') %}
+                    {% if t_id in active_bots %}
+                        {% set match = data.get('match_info') %}
+                        {% set player_name = data.get('user') %}
+                        {% set clean_url_name = player_name.replace(' ', '') %}
+                        
+                        <div class="bot-item">
+                            <div>
+                                <strong>👤 {{ player_name }}</strong><br>
+                                <span class="tournament-title">🏆 {{ data.get('tournament_name', 'Chargement du nom...') }}</span><br>
+                                <small style="color: #666;">ID Tournoi: {{ t_id }}</small><br>
+                                
+                                <span class="badge">
+                                    Ronde {{ data.get('current_round', '?') }} / {{ data.get('total_rounds', '?') }}
+                                </span>
 
-                            {% if match and match.get('opponent') %}
-                                <div class="match-details">
-                                    <strong>Table {{ match.get('table') }}</strong> ({{ '♔ Blancs' if match.get('color') == 'Blancs' else '♚ Noirs' }})<br>
-                                    vs 👥 <em>{{ match.get('opponent') }}</em>
-                                </div>
-                            {% else %}
-                                <div style="font-size: 12px; color: #888; margin-top: 6px;">
-                                    ⏳ {{ data.get('status', 'En attente des appariements') }}
-                                </div>
-                            {% endif %}
+                                {% if match and match.get('opponent') %}
+                                    <div class="match-details">
+                                        <strong>Table {{ match.get('table') }}</strong> ({{ '♔ Blancs' if match.get('color') == 'Blancs' else '♚ Noirs' }})<br>
+                                        vs 👥 <em>{{ match.get('opponent') }}</em>
+                                    </div>
+                                {% else %}
+                                    <div style="font-size: 12px; color: #888; margin-top: 6px;">
+                                        ⏳ {{ data.get('status', 'En attente des appariements') }}
+                                    </div>
+                                {% endif %}
 
-                            <a href="/tournament/{{ t_id }}/{{ clean_url_name }}" target="_blank" class="mobile-btn">📱 Lien Mobile</a>
+                                <a href="/tournament/{{ t_id }}/{{ clean_url_name }}" target="_blank" class="mobile-btn">📱 Lien Mobile</a>
+                            </div>
+                            <form method="POST" action="/stop" style="margin: 0;">
+                                <input type="hidden" name="bot_key" value="{{ bot_key }}">
+                                <button type="submit" class="stop-btn">Arrêter</button>
+                            </form>
                         </div>
-                        <form method="POST" action="/stop" style="margin: 0;">
-                            <input type="hidden" name="bot_key" value="{{ bot_key }}">
-                            <button type="submit" class="stop-btn">Arrêter</button>
-                        </form>
-                    </div>
-                {% endif %}
-            {% endfor %}
-        {% endif %}
+                    {% endif %}
+                {% endfor %}
+            {% endif %}
+        </div>
 
         <h3 style="margin-top: 25px; color: #444;">📁 Historiques conservés</h3>
         {% if not statuses %}
@@ -147,5 +159,84 @@
             {% endfor %}
         {% endif %}
     </div>
+
+    <script>
+        function toggleNotificationProvider(provider) {
+            const pushoverBox = document.getElementById('pushover_options');
+            const tokenInput = document.getElementById('pushover_app_token');
+            const keyInput = document.getElementById('pushover_user_key');
+
+            if (provider === 'pushover') {
+                pushoverBox.style.display = 'block';
+                tokenInput.required = true;
+                keyInput.required = true;
+            } else {
+                pushoverBox.style.display = 'none';
+                tokenInput.required = false;
+                keyInput.required = false;
+            }
+        }
+
+        async function refreshActiveBots() {
+            try {
+                const response = await fetch('/api/active_bots');
+                if (!response.ok) return;
+                const data = await response.json();
+
+                document.getElementById('active-bots-title').innerText = `📊 Suivis en cours (${data.active_bots_count} worker(s) actif(s))`;
+
+                const container = document.getElementById('active-bots-container');
+                if (data.bots.length === 0) {
+                    container.innerHTML = '<p style="color: #777;">Aucun suivi actif actuellement.</p>';
+                    return;
+                }
+
+                let html = '';
+                data.bots.forEach(bot => {
+                    let matchHtml = '';
+                    if (bot.match && bot.match.opponent) {
+                        const colorPiece = bot.match.color === 'Blancs' ? '♔ Blancs' : '♚ Noirs';
+                        matchHtml = `
+                            <div class="match-details">
+                                <strong>Table ${bot.match.table}</strong> (${colorPiece})<br>
+                                vs 👥 <em>${bot.match.opponent}</em>
+                            </div>`;
+                    } else {
+                        matchHtml = `
+                            <div style="font-size: 12px; color: #888; margin-top: 6px;">
+                                ⏳ ${bot.status}
+                            </div>`;
+                    }
+
+                    html += `
+                        <div class="bot-item">
+                            <div>
+                                <strong>👤 ${bot.user}</strong><br>
+                                <span class="tournament-title">🏆 ${bot.tournament_name}</span><br>
+                                <small style="color: #666;">ID Tournoi: ${bot.tournament_id}</small><br>
+                                
+                                <span class="badge">
+                                    Ronde ${bot.current_round} / ${bot.total_rounds}
+                                </span>
+
+                                ${matchHtml}
+
+                                <a href="/tournament/${bot.tournament_id}/${bot.clean_url_name}" target="_blank" class="mobile-btn">📱 Lien Mobile</a>
+                            </div>
+                            <form method="POST" action="/stop" style="margin: 0;">
+                                <input type="hidden" name="bot_key" value="${bot.bot_key}">
+                                <button type="submit" class="stop-btn">Arrêter</button>
+                            </form>
+                        </div>`;
+                });
+
+                container.innerHTML = html;
+            } catch (err) {
+                console.error("Erreur de mise à jour des suivis:", err);
+            }
+        }
+
+        setInterval(refreshActiveBots, 10000);
+    </script>
 </body>
 </html>
