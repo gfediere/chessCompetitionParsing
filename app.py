@@ -133,6 +133,11 @@ def get_statuses():
                 t_id = str(data.get("tournament_id", "")).strip()
                 user_name = str(data.get("user", "")).strip()
                 bot_key = f"{t_id}___{user_name}"
+
+                if "k_factor" not in data:
+                    sub = get_tournament_subscription(t_id)
+                    data["k_factor"] = sub.get("players", {}).get(user_name, {}).get("k_factor", 20)
+
                 statuses[bot_key] = data
         except Exception:
             continue
@@ -143,17 +148,20 @@ def get_statuses():
             with open(sub_file, "r", encoding="utf-8") as f:
                 sub_data = json.load(f)
                 t_id = str(sub_data.get("tournament_id", "")).strip()
-                for user_name in sub_data.get("players", {}):
+                for user_name, p_info in sub_data.get("players", {}).items():
                     bot_key = f"{t_id}___{user_name}"
                     if bot_key not in statuses:
                         statuses[bot_key] = {
                             "tournament_id": t_id,
                             "tournament_name": "Initialisation du tournoi...",
                             "user": user_name,
+                            "k_factor": p_info.get("k_factor", 20),
                             "current_round": 1,
                             "total_rounds": "?",
                             "status": "Démarrage du worker en cours...",
                             "current_points": 0.0,
+                            "delta_elo": 0.0,
+                            "performance": 0,
                             "match_info": None,
                             "round_history": []
                         }
@@ -194,6 +202,7 @@ def api_active_bots():
                 "tournament_id": t_id,
                 "tournament_name": data.get("tournament_name", "Chargement du nom..."),
                 "user": player_name,
+                "k_factor": data.get("k_factor", 20),
                 "clean_url_name": player_name.replace(" ", ""),
                 "current_round": data.get("current_round", "?"),
                 "total_rounds": data.get("total_rounds", "?"),
@@ -241,6 +250,8 @@ def player_view_slug(tournament_id, player_slug):
                     "total_rounds": "?",
                     "status": "En attente du premier passage du worker...",
                     "current_points": 0.0,
+                    "delta_elo": 0.0,
+                    "performance": 0,
                     "match_info": None,
                     "round_history": []
                 }
@@ -293,11 +304,13 @@ def start():
 
     provider = request.form.get("notification_provider", "none").strip()
     enable_pushover = (provider == "pushover")
+    k_factor = float(request.form.get("k_factor", "20"))
 
     sub = get_tournament_subscription(tournament_id)
     sub["tournament_id"] = tournament_id
     sub["players"][user] = {
         "name": user,
+        "k_factor": k_factor,
         "notification_provider": provider,
         "enable_pushover": enable_pushover,
         "pushover_app_token": request.form.get("pushover_app_token", "").strip() if enable_pushover else "",

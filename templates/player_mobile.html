@@ -10,10 +10,18 @@
         .card { background: white; border-radius: 16px; padding: 20px; width: 100%; max-width: 400px; box-shadow: 0 8px 20px rgba(0,0,0,0.08); }
         .header { text-align: center; border-bottom: 2px solid #f0f0f0; padding-bottom: 15px; margin-bottom: 15px; }
         .player-name { font-size: 22px; font-weight: bold; color: #1a1a1a; margin: 0; }
+        .player-elo { font-size: 13px; color: #718096; font-weight: 500; margin-top: 2px; }
         .tournament-name { font-size: 14px; color: #0056b3; font-weight: 600; margin-top: 5px; }
-        .round-badge { display: inline-block; background: #007bff; color: white; padding: 6px 14px; border-radius: 20px; font-size: 14px; font-weight: bold; margin-top: 10px; }
-        .points-badge { display: inline-block; background: #28a745; color: white; padding: 6px 14px; border-radius: 20px; font-size: 14px; font-weight: bold; margin-top: 10px; margin-left: 5px; }
+        .round-badge { display: inline-block; background: #007bff; color: white; padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: bold; }
+        .points-badge { display: inline-block; background: #28a745; color: white; padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: bold; }
         
+        .badges-row { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; margin-top: 10px; }
+        .elo-badge { display: inline-block; padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: bold; color: white; }
+        .elo-up { background: #28a745; }
+        .elo-down { background: #dc3545; }
+        .elo-neutral { background: #6c757d; }
+        .perf-badge { display: inline-block; background: #6f42c1; color: white; padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: bold; }
+
         .match-card { background: #f8f9fa; border-radius: 12px; padding: 15px; border: 1px solid #e9ecef; margin-top: 15px; text-align: center; }
         .table-number { font-size: 26px; font-weight: 800; color: #2d3748; margin-bottom: 5px; }
         .piece-color { font-size: 18px; font-weight: 600; padding: 6px 14px; border-radius: 8px; display: inline-block; margin-bottom: 10px; }
@@ -21,6 +29,7 @@
         .black-piece { background: #2d3748; color: #ffffff; }
         .vs-label { font-size: 11px; color: #a0aec0; text-transform: uppercase; letter-spacing: 1px; font-weight: bold; }
         .opponent-name { font-size: 18px; font-weight: bold; color: #2b6cb0; margin-top: 4px; }
+        .opponent-elo { font-size: 13px; color: #718096; margin-top: 2px; font-weight: 500; }
         
         .history-section { margin-top: 25px; border-top: 2px solid #f0f0f0; padding-top: 15px; }
         .history-title { font-size: 15px; font-weight: bold; color: #4a5568; margin-bottom: 12px; text-align: left; }
@@ -41,8 +50,14 @@
     <div class="card">
         <div class="header">
             <h1 class="player-name">👤 {{ player }}</h1>
+            {% set p_elo = status_info.get('player_elo', 0) %}
+            {% if p_elo > 0 %}
+                <div class="player-elo">Elo : {{ p_elo }} FIDE</div>
+            {% endif %}
+
             <div class="tournament-name">🏆 {{ status_info.get('tournament_name', 'Tournoi en cours') }}</div>
-            <div>
+            
+            <div class="badges-row">
                 <div class="round-badge">
                     {% if status_info.get('status') == 'Terminé' %}
                         Tournoi Terminé
@@ -53,6 +68,20 @@
                 <div class="points-badge">
                     ⭐ {{ points_display }} pt(s)
                 </div>
+
+                {% set delta = status_info.get('delta_elo', 0.0) %}
+                {% if delta > 0 %}
+                    <div class="elo-badge elo-up">📈 +{{ delta }} Elo</div>
+                {% elif delta < 0 %}
+                    <div class="elo-badge elo-down">📉 {{ delta }} Elo</div>
+                {% else %}
+                    <div class="elo-badge elo-neutral">➖ 0.0 Elo</div>
+                {% endif %}
+
+                {% set perf = status_info.get('performance', 0) %}
+                {% if perf > 0 %}
+                    <div class="perf-badge">🎯 Perf: {{ perf }}</div>
+                {% endif %}
             </div>
         </div>
 
@@ -69,6 +98,9 @@
 
                 <div class="vs-label">Adversaire Ronde {{ match.get('round', status_info.get('current_round')) }}</div>
                 <div class="opponent-name">{{ match.get('opponent') }}</div>
+                {% if match.get('opponent_elo', 0) > 0 %}
+                    <div class="opponent-elo">Elo : {{ match.get('opponent_elo') }}</div>
+                {% endif %}
             </div>
         {% else %}
             <div class="status-waiting">
@@ -92,6 +124,9 @@
                             <span> (Ech. {{ item.get('table') }})</span><br>
                             <span class="history-opponent">
                                 {{ '♔' if item.get('color') == 'Blancs' else '♚' }} vs {{ item.get('opponent') }}
+                                {% if item.get('opponent_elo', 0) > 0 %}
+                                    <small style="color: #718096;">({{ item.get('opponent_elo') }})</small>
+                                {% endif %}
                             </span>
                         </div>
                         <div>

@@ -1,7 +1,9 @@
 import http.client
 import json
 import logging
+import math
 import os
+import re
 import time
 import unicodedata
 import urllib.parse
@@ -30,11 +32,11 @@ INTERVAL_CHECK_RESULT = 30      # 30s when waiting for results publication
 
 tournament_id = os.environ.get("tournament_id")
 round_total = int(os.environ.get("rounds", 7))
-round_start = 1                 # Toujours démarrer à la ronde 1
+round_start = 1
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, "data")                   # Player status files
-SUBSCRIPTIONS_DIR = os.path.join(BASE_DIR, "subscriptions") # Active subscriptions
+DATA_DIR = os.path.join(BASE_DIR, "data")
+SUBSCRIPTIONS_DIR = os.path.join(BASE_DIR, "subscriptions")
 
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(SUBSCRIPTIONS_DIR, exist_ok=True)
@@ -42,13 +44,20 @@ os.makedirs(SUBSCRIPTIONS_DIR, exist_ok=True)
 SUBSCRIPTION_FILE = os.path.join(SUBSCRIPTIONS_DIR, f"sub_{tournament_id}.json")
 
 # ---------------------------------------------------------------------------
-# HELPERS
+# ELO & PERFORMANCE HELPERS
 # ---------------------------------------------------------------------------
 def clean_text(text: str) -> str:
     if not text:
         return ""
     text = unicodedata.normalize("NFKD", text).replace("\xa0", " ")
     return " ".join(text.split()).lower()
+
+def extract_elo(cell_text: str) -> int:
+    """Extrait le premier nombre à 3 ou 4 chiffres d'une cellule texte."""
+    if not cell_text:
+        return 0
+    match = re.search(r'\b\d{3,4}\b', cell_text)
+    return int(match.group(0)) if match else 0
 
 def calculate_total_points(round_history: list) -> float:
     total = 0.0
@@ -67,8 +76,58 @@ def format_points(points: float) -> str:
         return f"{int(points)}"
     return f"{points}"
 
+def get_expected_score(player_elo: float, opponent_elo: float) -> float:
+    """Calculates FIDE expected score based on Elo rating difference."""
+    diff = opponent_elo - player_elo
+    return 1.0 / (1.0 + 10.0 ** (diff / 400.0))
+
+def calculate_elo_and_perf(player_elo: float, round_history: list, k_factor: float = 20.0) -> tuple[float, int]:
+    """Calculates cumulative Delta Elo and FIDE Performance."""
+    if not round_history or player_elo == 0:
+        return 0.0, 0
+
+    total_delta = 0.0
+    total_score = 0.0
+    opponents_elo = []
+
+    for item in round_history:
+        res = item.get("result", "")
+        opp_elo = float(item.get("opponent_elo", 0))
+
+        if opp_elo == 0 or res not in ["1 - 0", "0 - 1", "½ - ½"]:
+            continue
+
+        opponents_elo.append(opp_elo)
+
+        score = 0.0
+        if res == "1 - 0":
+            score = 1.0
+        elif res == "½ - ½":
+            score = 0.5
+        elif res == "0 - 1":
+            score = 0.0
+
+        total_score += score
+        expected = get_expected_score(player_elo, opp_elo)
+        total_delta += k_factor * (score - expected)
+
+    perf = 0
+    if opponents_elo:
+        avg_opp_elo = sum(opponents_elo) / len(opponents_elo)
+        percentage = total_score / len(opponents_elo)
+
+        if percentage >= 0.99:
+            dp = 800
+        elif percentage <= 0.01:
+            dp = -800
+        else:
+            dp = -400 * math.log10((1.0 / percentage) - 1.0)
+
+        perf = int(round(avg_opp_elo + dp))
+
+    return round(total_delta, 1), perf
+
 def load_subscriptions() -> dict:
-    """Dynamically reloads the list of subscriptions for this tournament."""
     if os.path.exists(SUBSCRIPTION_FILE):
         try:
             with open(SUBSCRIPTION_FILE, "r", encoding="utf-8") as f:
@@ -133,15 +192,21 @@ def check_url(url: str, retries: int = 3) -> BeautifulSoup | None:
     logger.error(f"[HTTP GET] Unable to reach URL after {retries} attempts: {url}")
     return None
 
-def update_player_status(t_id, player_name, current_round, status, t_name, match_info, round_history):
+def update_player_status(t_id, player_name, current_round, status, t_name, match_info, round_history, k_factor=20.0, player_elo=0):
     clean_player = player_name.replace(" ", "_")
     status_file = os.path.join(DATA_DIR, f"status_{t_id}_{clean_player}.json")
     
     current_points = calculate_total_points(round_history)
+    delta_elo, performance = calculate_elo_and_perf(player_elo, round_history, k_factor)
+
     data = {
         "tournament_id": t_id,
         "tournament_name": t_name,
         "user": player_name,
+        "player_elo": player_elo,
+        "k_factor": k_factor,
+        "delta_elo": delta_elo,
+        "performance": performance,
         "current_round": current_round,
         "total_rounds": round_total,
         "status": status,
@@ -152,7 +217,7 @@ def update_player_status(t_id, player_name, current_round, status, t_name, match
     try:
         with open(status_file, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False)
-        logger.debug(f"[Cache/Status] Updated file {status_file} (Status: '{status}')")
+        logger.debug(f"[Cache/Status] Updated file {status_file} (Status: '{status}', Delta Elo: {delta_elo})")
     except Exception as e:
         logger.error(f"[Cache/Status] Error writing status for {player_name}: {e}")
 
@@ -167,13 +232,14 @@ def tournament_name(tourn_id: str) -> str:
             return name
     return "Unknown Tournament"
 
-def catchup_player_history(p_name: str, p_cfg: dict, current_round: int, t_name: str) -> list:
+def catchup_player_history(p_name: str, p_cfg: dict, current_round: int, t_name: str) -> tuple[list, int]:
     """Fetches past rounds history for a player added mid-tournament."""
     logger.info(f"[Catchup] Fetching history for rounds 1 to {current_round - 1} for '{p_name}'...")
     
     clean_p = clean_text(p_name)
     tokens = [w for w in clean_p.split() if len(w) > 2]
     history = []
+    found_player_elo = 0
 
     for past_round in range(round_start, current_round):
         action_round = f"{past_round:02d}" if past_round < 10 else str(past_round)
@@ -193,12 +259,19 @@ def catchup_player_history(p_name: str, p_cfg: dict, current_round: int, t_name:
 
             if all(t in row_str for t in tokens):
                 table_num = row_cells[0]
-                white_player = row_cells[2]
+                white_player = row_cells[2] if len(row_cells) > 2 else ""
+                white_elo = extract_elo(row_cells[3]) if len(row_cells) > 3 else 0
                 black_player = row_cells[5] if len(row_cells) > 5 else ""
+                black_elo = extract_elo(row_cells[6]) if len(row_cells) > 6 else 0
 
                 is_white = all(t in clean_text(white_player) for t in tokens)
                 color = "Blancs" if is_white else "Noirs"
                 opponent = black_player if is_white else white_player
+                opponent_elo = black_elo if is_white else white_elo
+                
+                curr_elo = white_elo if is_white else black_elo
+                if curr_elo > 0:
+                    found_player_elo = curr_elo
 
                 result = "En cours"
                 if "1 - 0" in row_str or "1-0" in row_str:
@@ -212,6 +285,7 @@ def catchup_player_history(p_name: str, p_cfg: dict, current_round: int, t_name:
                     "round": past_round,
                     "table": table_num,
                     "opponent": opponent,
+                    "opponent_elo": opponent_elo,
                     "color": color,
                     "result": result
                 }
@@ -221,16 +295,20 @@ def catchup_player_history(p_name: str, p_cfg: dict, current_round: int, t_name:
 
     if history:
         pts = calculate_total_points(history)
+        k_factor = p_cfg.get("k_factor", 20.0)
+        delta, perf = calculate_elo_and_perf(found_player_elo, history, k_factor)
+        
         msg_catchup = (
             f"Tracking activated for {p_name}!\n"
             f"Caught up rounds: {len(history)}\n"
-            f"Current score: {format_points(pts)} pt(s)"
+            f"Current score: {format_points(pts)} pt(s)\n"
+            f"Elo variation: {delta:+g} Elo"
         )
         clean_slug = p_name.replace(" ", "")
         mobile_url = f"{p_cfg.get('SERVER_URL')}/tournament/{tournament_id}/{clean_slug}"
         push_over(p_cfg, msg_catchup, url=mobile_url)
 
-    return history
+    return history, found_player_elo
 
 # ---------------------------------------------------------------------------
 # MAIN WORKER LOOP
@@ -268,11 +346,13 @@ if __name__ == "__main__":
                     logger.info(f"[Subscriptions] Registering new subscribed player: '{p_name}'")
                     
                     past_history = []
+                    found_elo = 0
                     if round_num > round_start:
-                        past_history = catchup_player_history(p_name, p_cfg, round_num, t_name)
+                        past_history, found_elo = catchup_player_history(p_name, p_cfg, round_num, t_name)
 
                     players_state[p_name] = {
                         "history": past_history,
+                        "player_elo": found_elo,
                         "pairing_sent": False,
                         "result_sent": False,
                         "match_data": None
@@ -294,6 +374,7 @@ if __name__ == "__main__":
                 state = players_state[p_name]
                 clean_p = clean_text(p_name)
                 tokens = [w for w in clean_p.split() if len(w) > 2]
+                k_factor = float(p_cfg.get("k_factor", 20.0))
 
                 player_row = None
                 for row in table_rows:
@@ -306,16 +387,24 @@ if __name__ == "__main__":
                     all_pairings_found = False
                     all_results_found = False
                     logger.debug(f"[Player] Pairings not yet published for {p_name} (Round {round_num})")
-                    update_player_status(tournament_id, p_name, round_num, "En attente des appariements", t_name, None, state["history"])
+                    update_player_status(tournament_id, p_name, round_num, "En attente des appariements", t_name, None, state["history"], k_factor, state.get("player_elo", 0))
                     continue
 
                 table_num = player_row[0]
-                white_player = player_row[2]
+                white_player = player_row[2] if len(player_row) > 2 else ""
+                white_elo = extract_elo(player_row[3]) if len(player_row) > 3 else 0
                 black_player = player_row[5] if len(player_row) > 5 else ""
-                
+                black_elo = extract_elo(player_row[6]) if len(player_row) > 6 else 0
+
                 is_white = all(t in clean_text(white_player) for t in tokens)
                 color = "Blancs" if is_white else "Noirs"
                 opponent = black_player if is_white else white_player
+                opponent_elo = black_elo if is_white else white_elo
+                
+                new_player_elo = white_elo if is_white else black_elo
+                if new_player_elo > 0:
+                    state["player_elo"] = new_player_elo
+                player_elo = state.get("player_elo", 0)
 
                 row_str = " ".join([clean_text(x) for x in player_row])
                 result = "En cours"
@@ -330,6 +419,7 @@ if __name__ == "__main__":
                     "round": round_num,
                     "table": table_num,
                     "opponent": opponent,
+                    "opponent_elo": opponent_elo,
                     "color": color,
                     "result": result
                 }
@@ -338,7 +428,7 @@ if __name__ == "__main__":
                 if not state["pairing_sent"]:
                     state["pairing_sent"] = True
                     logger.info(f"[Pairings] Pairing found for {p_name} (Board {table_num}, {color} vs {opponent})")
-                    msg = f"Ronde {round_num} - Echiquier {table_num}\nJoueur: {p_name}\nCouleur: {color}\nAdversaire: {opponent}"
+                    msg = f"Ronde {round_num} - Echiquier {table_num}\nJoueur: {p_name}\nCouleur: {color}\nAdversaire: {opponent} ({opponent_elo})"
                     clean_slug = p_name.replace(" ", "")
                     mobile_url = f"{p_cfg.get('SERVER_URL')}/tournament/{tournament_id}/{clean_slug}"
                     push_over(p_cfg, msg, url=mobile_url)
@@ -346,17 +436,24 @@ if __name__ == "__main__":
                 if result == "En cours":
                     all_results_found = False
                     any_game_in_progress = True
-                    update_player_status(tournament_id, p_name, round_num, "Match en cours", t_name, match_data, state["history"])
+                    update_player_status(tournament_id, p_name, round_num, "Match en cours", t_name, match_data, state["history"], k_factor, player_elo)
                 else:
                     if not state["result_sent"]:
                         state["result_sent"] = True
                         state["history"].append(match_data)
                         pts = calculate_total_points(state["history"])
-                        logger.info(f"[Results] Result published for {p_name}: {result} (New score: {format_points(pts)} pts)")
-                        res_msg = f"Ronde {round_num} Terminée pour {p_name} !\nRésultat: {result}\nNouveau total: {format_points(pts)} pt(s)"
+                        delta, perf = calculate_elo_and_perf(player_elo, state["history"], k_factor)
+                        
+                        logger.info(f"[Results] Result published for {p_name}: {result} (Score: {format_points(pts)} pts, Delta Elo: {delta:+g})")
+                        res_msg = (
+                            f"Ronde {round_num} Terminée pour {p_name} !\n"
+                            f"Résultat: {result}\n"
+                            f"Nouveau total: {format_points(pts)} pt(s)\n"
+                            f"Variation Elo: {delta:+g} Elo (Perf: {perf})"
+                        )
                         push_over(p_cfg, res_msg)
 
-                    update_player_status(tournament_id, p_name, round_num, "Partie terminée", t_name, match_data, state["history"])
+                    update_player_status(tournament_id, p_name, round_num, "Partie terminée", t_name, match_data, state["history"], k_factor, player_elo)
 
             if all_pairings_found and all_results_found:
                 round_completed_for_all = True
