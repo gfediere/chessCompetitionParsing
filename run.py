@@ -36,6 +36,9 @@ server_url = os.environ.get("SERVER_URL", "https://chess-bot.fedallica.fr").rstr
 round_start = int(os.environ.get("round_start", 1))
 notification_players_ranking = "no-notification-players-ranking" not in os.environ
 
+# Détection du mode Dry Run
+is_dry_run = "dry-run" in os.environ or os.environ.get("dry_run") == "True"
+
 
 # ---------------------------------------------------------------------------
 # FUNCTIONS
@@ -48,6 +51,27 @@ def clean_text(text: str) -> str:
     return " ".join(text.split()).lower()
 
 
+def calculate_total_points(round_history: list) -> float:
+    """Calcule le total cumulé de points à partir de l'historique des résultats."""
+    total = 0.0
+    for item in round_history:
+        res = item.get("result", "")
+        if res == "1 - 0":
+            total += 1.0
+        elif res == "0 - 1":
+            total += 0.0
+        elif res in ["½ - ½", "1/2 - 1/2", "X - X"]:
+            total += 0.5
+    return total
+
+
+def format_points(points: float) -> str:
+    """Formate le score proprement (ex: 2.5 pts au lieu de 2.50)."""
+    if points.is_integer():
+        return f"{int(points)}"
+    return f"{points}"
+
+
 def update_status(
     current_round,
     status="En cours",
@@ -55,7 +79,7 @@ def update_status(
     match_info=None,
     round_history=None,
 ):
-    """Enregistre l'état du bot et les détails du match courant."""
+    """Enregistre l'état du bot, les détails du match courant et les points cumulés."""
     t_id = os.environ.get("tournament_id", "unknown").strip()
     u_name = os.environ.get("user", "unknown").strip()
 
@@ -78,6 +102,8 @@ def update_status(
     if round_history is None:
         round_history = []
 
+    current_points = calculate_total_points(round_history)
+
     data = {
         "tournament_id": t_id,
         "tournament_name": t_name,
@@ -85,6 +111,7 @@ def update_status(
         "current_round": current_round,
         "total_rounds": os.environ.get("rounds"),
         "status": status,
+        "current_points": current_points,
         "match_info": match_info,
         "round_history": round_history,
     }
@@ -97,9 +124,9 @@ def update_status(
 
 
 def push_over(message: str, url: str = None, url_title: str = None):
-    """Envoyer une notification Pushover."""
-    if "dry-run" in os.environ or os.environ.get("dry_run") == "True":
-        logger.info("Dry run: Pushover message not sent!")
+    """Envoyer une notification Pushover (gère le mode dry run)."""
+    if is_dry_run:
+        logger.info(f"🧪 [DRY RUN] Message Pushover non envoyé :\n--- MESSAGE ---\n{message}\nURL: {url}\n---------------")
         return
 
     try:
@@ -177,10 +204,22 @@ def get_match_result(round_number: int) -> str:
                         return "1 - 0" if is_white else "0 - 1"
                     elif "0 - 1" in row_str or "0-1" in row_str:
                         return "0 - 1" if is_white else "1 - 0"
-                    elif "1/2" in row_str or "½" in row_str:
+                    elif "1/2" in row_str or "½" in row_str or "x - x" in row_str or "x-x" in row_str:
                         return "½ - ½"
 
     return "En cours"
+
+
+def wait_for_round_result(round_number: int, check_interval_sec: int = 45) -> str:
+    """Sonde la page de la ronde en direct jusqu'à la publication de la feuille de partie."""
+    logger.info(f"🔍 Début du suivi en direct du résultat de la Ronde {round_number}...")
+    while True:
+        res = get_match_result(round_number)
+        if res != "En cours":
+            logger.info(f"✅ Résultat de la ronde {round_number} publié en direct : {res}")
+            return res
+        
+        time.sleep(check_interval_sec)
 
 
 def check_round(round_number: int) -> tuple[str, dict]:
@@ -281,7 +320,7 @@ def get_player_details(player_name: str) -> list[str]:
 
 
 def get_ranking(round_num: int, type_rank: str = "full") -> str:
-    """Récupère le classement général sans bloquer sur la chaîne 'après la ronde X'."""
+    """Récupère le classement général."""
     logger.info(f"Ranking type is: {type_rank}")
     url = f"https://www.echecs.asso.fr/Resultats.aspx?URL=Tournois/Id/{tournament_id}/{tournament_id}&Action=Cl"
 
@@ -366,6 +405,9 @@ def tournament_name(tourn_id: str) -> str:
 # MAIN EXECUTION
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
+    if is_dry_run:
+        logger.info("🧪 PROGRAMME DEMARRE EN MODE DRY-RUN (AUCUNE NOTIFICATION PUSHOVER NE SERA ENVOYEE)")
+
     logger.info(
         f"Starting program for tournament {tournament_id} ({round_total} rounds) for {player}. Starting round: {round_start}"
     )
@@ -406,12 +448,6 @@ if __name__ == "__main__":
     for rondeNumber in range(round_start, int(round_total) + 1):
         logger.info(f"Checking Round: {rondeNumber}")
 
-        # Mettre à jour le résultat de la ronde précédente
-        if history:
-            prev_round_idx = len(history) - 1
-            prev_round_num = history[prev_round_idx]["round"]
-            history[prev_round_idx]["result"] = get_match_result(prev_round_num)
-
         update_status(
             current_round=rondeNumber,
             status="En attente des appariements",
@@ -424,6 +460,10 @@ if __name__ == "__main__":
 
         if match_data:
             history.append(match_data)
+
+        # Ajout des points cumulés actuels au message de ronde
+        current_pts = calculate_total_points(history[:-1])
+        msg_round = f"Points en cours: {format_points(current_pts)} pt(s)\n\n" + msg_round
 
         update_status(
             current_round=rondeNumber,
@@ -439,11 +479,27 @@ if __name__ == "__main__":
         logger.info(f"Sending message for round {rondeNumber}:\n{msg_round}")
         push_over(msg_round)
 
-    # Vérification directe du résultat de la dernière ronde
-    if history:
-        last_round_num = history[-1]["round"]
-        logger.info(f"Vérification du résultat pour la ronde {last_round_num}...")
-        history[-1]["result"] = get_match_result(last_round_num)
+        # ⚡ SUIVI EN DIRECT DU RESULTAT
+        round_res = wait_for_round_result(rondeNumber)
+        if history:
+            history[-1]["result"] = round_res
+
+        total_pts = calculate_total_points(history)
+        res_msg = (
+            f"Ronde {rondeNumber} - Résultat de la partie :\n"
+            f"Score : {round_res}\n"
+            f"Match : {match_data.get('color', '')} vs {match_data.get('opponent', '')}\n\n"
+            f"📊 Nouveau total : {format_points(total_pts)} pt(s)"
+        )
+        push_over(res_msg)
+
+        update_status(
+            current_round=rondeNumber,
+            status="Partie terminée",
+            t_name=t_name,
+            match_info=match_data,
+            round_history=history,
+        )
 
     logger.info(f"Round {round_total} finished. Fetching final results...")
     

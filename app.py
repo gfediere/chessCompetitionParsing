@@ -8,6 +8,10 @@ import unicodedata
 import requests
 from bs4 import BeautifulSoup
 from flask import Flask, flash, redirect, render_template_string, request, url_for
+from dotenv import load_dotenv
+
+# Chargement automatique des variables d'environnement depuis le fichier .env
+load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
@@ -15,7 +19,7 @@ app.secret_key = os.urandom(24)
 active_bots = {}
 
 # ---------------------------------------------------------------------------
-# HELPER DE NETTOYAGE D'ENCODAGE & TEXTE
+# HELPER DE NETTOYAGE D'ENCODAGE & TEXTE & CALCUL DE POINTS
 # ---------------------------------------------------------------------------
 def clean_text(text: str) -> str:
     """Nettoie les espaces insécables, accents et espaces superflus."""
@@ -23,6 +27,27 @@ def clean_text(text: str) -> str:
         return ""
     text = unicodedata.normalize("NFKD", text).replace("\xa0", " ")
     return " ".join(text.split()).lower()
+
+
+def calculate_total_points(round_history: list) -> float:
+    """Calcule le total cumulé de points à partir de l'historique."""
+    total = 0.0
+    for item in round_history:
+        res = item.get("result", "")
+        if res == "1 - 0":
+            total += 1.0
+        elif res == "0 - 1":
+            total += 0.0
+        elif res in ["½ - ½", "1/2 - 1/2", "X - X"]:
+            total += 0.5
+    return total
+
+
+def format_points(points: float) -> str:
+    """Formate le score proprement (ex: 2.5 au lieu de 2.50)."""
+    if points.is_integer():
+        return f"{int(points)}"
+    return f"{points}"
 
 
 def fetch_live_result(t_id, round_num, player_name):
@@ -35,7 +60,7 @@ def fetch_live_result(t_id, round_num, player_name):
 
     try:
         resp = requests.get(url, timeout=5)
-        resp.encoding = 'iso-8859-1' # Prise en compte de l'encodage FFE
+        resp.encoding = 'iso-8859-1'
         
         if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, "html.parser")
@@ -53,7 +78,7 @@ def fetch_live_result(t_id, round_num, player_name):
                             return "1 - 0" if is_white else "0 - 1"
                         elif "0 - 1" in row_str or "0-1" in row_str:
                             return "0 - 1" if is_white else "1 - 0"
-                        elif "1/2" in row_str or "½" in row_str:
+                        elif "1/2" in row_str or "½" in row_str or "x - x" in row_str or "x-x" in row_str:
                             return "½ - ½"
     except Exception:
         pass
@@ -108,31 +133,31 @@ DASHBOARD_TEMPLATE = """
         <form method="POST" action="/start">
             <div class="form-group">
                 <label>ID Tournoi (tournament_id)</label>
-                <input type="text" name="tournament_id" required placeholder="ex: 63375">
+                <input type="text" name="tournament_id" value="{{ defaults.tournament_id }}" required placeholder="ex: 63375">
             </div>
             <div class="form-group">
                 <label>Nom du Joueur (user)</label>
-                <input type="text" name="user" required placeholder="ex: NOM Prenom">
+                <input type="text" name="user" value="{{ defaults.user }}" required placeholder="ex: NOM Prenom">
             </div>
             <div class="form-group">
                 <label>Adresse du Serveur Web (pour lien cliquable)</label>
-                <input type="text" name="SERVER_URL" value="https://chess-bot.fedallica.fr" required>
+                <input type="text" name="SERVER_URL" value="{{ defaults.SERVER_URL }}" required>
             </div>
             <div class="form-group">
                 <label>Nombre de rondes (rounds)</label>
-                <input type="number" name="rounds" value="7" required>
+                <input type="number" name="rounds" value="{{ defaults.rounds }}" required>
             </div>
             <div class="form-group">
                 <label>Ronde de départ (round_start)</label>
-                <input type="number" name="round_start" value="1" required>
+                <input type="number" name="round_start" value="{{ defaults.round_start }}" required>
             </div>
             <div class="form-group">
                 <label>Pushover App Token</label>
-                <input type="text" name="pushover_app_token" required>
+                <input type="text" name="pushover_app_token" value="{{ defaults.pushover_app_token }}" required>
             </div>
             <div class="form-group">
                 <label>Pushover User Key</label>
-                <input type="text" name="pushover_user_key" required>
+                <input type="text" name="pushover_user_key" value="{{ defaults.pushover_user_key }}" required>
             </div>
             <div class="form-group">
                 <label>Niveau de Log</label>
@@ -142,7 +167,7 @@ DASHBOARD_TEMPLATE = """
                 </select>
             </div>
             <div class="checkbox-group">
-                <input type="checkbox" id="dry_run" name="dry_run" value="True">
+                <input type="checkbox" id="dry_run" name="dry_run" value="True" {% if defaults.dry_run == 'True' %}checked{% endif %}>
                 <label for="dry_run">Mode Simulation (dry-run)</label>
             </div>
 
@@ -232,6 +257,7 @@ PLAYER_MOBILE_TEMPLATE = """
         .player-name { font-size: 22px; font-weight: bold; color: #1a1a1a; margin: 0; }
         .tournament-name { font-size: 14px; color: #0056b3; font-weight: 600; margin-top: 5px; }
         .round-badge { display: inline-block; background: #007bff; color: white; padding: 6px 14px; border-radius: 20px; font-size: 14px; font-weight: bold; margin-top: 10px; }
+        .points-badge { display: inline-block; background: #28a745; color: white; padding: 6px 14px; border-radius: 20px; font-size: 14px; font-weight: bold; margin-top: 10px; margin-left: 5px; }
         
         .match-card { background: #f8f9fa; border-radius: 12px; padding: 15px; border: 1px solid #e9ecef; margin-top: 15px; text-align: center; }
         .table-number { font-size: 26px; font-weight: 800; color: #2d3748; margin-bottom: 5px; }
@@ -261,12 +287,17 @@ PLAYER_MOBILE_TEMPLATE = """
         <div class="header">
             <h1 class="player-name">👤 {{ player }}</h1>
             <div class="tournament-name">🏆 {{ status_info.get('tournament_name', 'Tournoi en cours') }}</div>
-            <div class="round-badge">
-                {% if status_info.get('status') == 'Terminé' %}
-                    Tournoi Terminé
-                {% else %}
-                    Ronde {{ status_info.get('current_round', '?') }} / {{ status_info.get('total_rounds', '?') }}
-                {% endif %}
+            <div>
+                <div class="round-badge">
+                    {% if status_info.get('status') == 'Terminé' %}
+                        Tournoi Terminé
+                    {% else %}
+                        Ronde {{ status_info.get('current_round', '?') }} / {{ status_info.get('total_rounds', '?') }}
+                    {% endif %}
+                </div>
+                <div class="points-badge">
+                    ⭐ {{ points_display }} pt(s)
+                </div>
             </div>
         </div>
 
@@ -363,8 +394,23 @@ def clean_dead_processes():
 def index():
     clean_dead_processes()
     statuses = get_statuses()
+    
+    defaults = {
+        "tournament_id": os.getenv("tournament_id", ""),
+        "user": os.getenv("user", ""),
+        "SERVER_URL": os.getenv("SERVER_URL", "https://chess-bot.fedallica.fr"),
+        "rounds": os.getenv("rounds", "7"),
+        "round_start": os.getenv("round_start", "1"),
+        "pushover_app_token": os.getenv("pushover_app_token", ""),
+        "pushover_user_key": os.getenv("pushover_user_key", ""),
+        "dry_run": os.getenv("dry_run", "False"),
+    }
+
     return render_template_string(
-        DASHBOARD_TEMPLATE, active_bots=active_bots, statuses=statuses
+        DASHBOARD_TEMPLATE,
+        active_bots=active_bots,
+        statuses=statuses,
+        defaults=defaults,
     )
 
 
@@ -386,7 +432,7 @@ def player_view_slug(tournament_id, player_slug):
             target_filepath = f"status_{t_id}_{clean_player}.json"
             break
 
-    # RAFRAÎCHISSEMENT EN DIRECT : Consulte la page de la ronde en direct si une ronde reste 'En cours'
+    # RAFRAÎCHISSEMENT EN DIRECT : Consulte la page de la ronde si une partie est 'En cours'
     if status_info and target_filepath:
         history = status_info.get("round_history", [])
         updated = False
@@ -398,16 +444,22 @@ def player_view_slug(tournament_id, player_slug):
                     updated = True
 
         if updated:
+            status_info["current_points"] = calculate_total_points(history)
             try:
                 with open(target_filepath, "w", encoding="utf-8") as f:
                     json.dump(status_info, f, ensure_ascii=False)
             except Exception:
                 pass
 
+    history = status_info.get("round_history", [])
+    total_pts = calculate_total_points(history)
+    points_display = format_points(total_pts)
+
     return render_template_string(
         PLAYER_MOBILE_TEMPLATE,
         player=found_player_name,
-        status_info=status_info
+        status_info=status_info,
+        points_display=points_display,
     )
 
 
@@ -435,6 +487,7 @@ def start():
     }
 
     if request.form.get("dry_run"):
+        data["dry_run"] = "True"
         data["dry-run"] = "True"
 
     env_child = os.environ.copy()
