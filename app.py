@@ -7,7 +7,7 @@ import sys
 import unicodedata
 import requests
 from bs4 import BeautifulSoup
-from flask import Flask, flash, redirect, render_template_string, request, url_for
+from flask import Flask, flash, redirect, render_template, request, url_for
 from dotenv import load_dotenv
 
 # Chargement automatique des variables d'environnement depuis le fichier .env
@@ -92,283 +92,6 @@ def fetch_live_result(t_id, round_num, player_name):
 
 
 # ---------------------------------------------------------------------------
-# TEMPLATES HTML
-# ---------------------------------------------------------------------------
-
-DASHBOARD_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="fr">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FFE Chess Bot Controller</title>
-    <style>
-        body { font-family: system-ui, sans-serif; background: #f4f6f8; margin: 0; padding: 20px; display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; }
-        .card { background: white; padding: 25px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); width: 100%; max-width: 480px; }
-        h2 { margin-top: 0; color: #333; }
-        .form-group { margin-bottom: 12px; }
-        label { display: block; margin-bottom: 4px; font-weight: bold; color: #555; font-size: 14px; }
-        input[type="text"], input[type="number"], select { width: 100%; padding: 8px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
-        .checkbox-group { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
-        button { background: #28a745; color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer; width: 100%; font-size: 16px; margin-top: 10px; }
-        button:hover { background: #218838; }
-        .stop-btn { background: #dc3545; margin-top: 0; padding: 6px 12px; font-size: 13px; width: auto; }
-        .stop-btn:hover { background: #c82333; }
-        .mobile-btn { display: inline-block; background: #17a2b8; color: white; text-decoration: none; padding: 4px 8px; border-radius: 4px; font-size: 12px; margin-top: 6px; }
-        .mobile-btn:hover { background: #138496; }
-        .flash { background: #d4edda; color: #155724; padding: 10px; border-radius: 4px; margin-bottom: 15px; }
-        .bot-item { display: flex; justify-content: space-between; align-items: flex-start; padding: 12px; border: 1px solid #ddd; border-radius: 6px; margin-bottom: 10px; background: #fafafa; }
-        .tournament-title { color: #0056b3; font-weight: bold; font-size: 13px; }
-        .match-details { margin-top: 6px; padding: 6px 8px; background: #eef4fc; border-left: 3px solid #007bff; border-radius: 4px; font-size: 13px; color: #333; }
-        .badge { display: inline-block; padding: 4px 10px; background: #007bff; color: white; border-radius: 12px; font-size: 12px; font-weight: bold; margin-top: 6px; }
-        .archive-item { padding: 10px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h2>➕ Lancer un suivi</h2>
-        {% with messages = get_flashed_messages() %}
-          {% if messages %}
-            {% for message in messages %}
-              <div class="flash">{{ message }}</div>
-            {% endfor %}
-          {% endif %}
-        {% endwith %}
-
-        <form method="POST" action="/start">
-            <div class="form-group">
-                <label>ID Tournoi (tournament_id)</label>
-                <input type="text" name="tournament_id" value="{{ defaults.tournament_id }}" required placeholder="ex: 63375">
-            </div>
-            <div class="form-group">
-                <label>Nom du Joueur (user)</label>
-                <input type="text" name="user" value="{{ defaults.user }}" required placeholder="ex: NOM Prenom">
-            </div>
-            <div class="form-group">
-                <label>Adresse du Serveur Web (pour lien cliquable)</label>
-                <input type="text" name="SERVER_URL" value="{{ defaults.SERVER_URL }}" required>
-            </div>
-            <div class="form-group">
-                <label>Nombre de rondes (rounds)</label>
-                <input type="number" name="rounds" value="{{ defaults.rounds }}" required>
-            </div>
-            <div class="form-group">
-                <label>Ronde de départ (round_start)</label>
-                <input type="number" name="round_start" value="{{ defaults.round_start }}" required>
-            </div>
-            <div class="form-group">
-                <label>Pushover App Token</label>
-                <input type="text" name="pushover_app_token" value="{{ defaults.pushover_app_token }}" required>
-            </div>
-            <div class="form-group">
-                <label>Pushover User Key</label>
-                <input type="text" name="pushover_user_key" value="{{ defaults.pushover_user_key }}" required>
-            </div>
-            <div class="form-group">
-                <label>Niveau de Log</label>
-                <select name="logLevel">
-                    <option value="INFO">INFO</option>
-                    <option value="DEBUG">DEBUG</option>
-                </select>
-            </div>
-            <div class="checkbox-group">
-                <input type="checkbox" id="dry_run" name="dry_run" value="True" {% if defaults.dry_run == 'True' %}checked{% endif %}>
-                <label for="dry_run">Mode Simulation (dry-run)</label>
-            </div>
-
-            <button type="submit">🚀 Lancer ce suivi</button>
-        </form>
-    </div>
-
-    <div class="card">
-        <h2>📊 Suivis en cours ({{ active_bots|length }})</h2>
-        {% if not active_bots %}
-            <p style="color: #777;">Aucun suivi actif actuellement.</p>
-        {% else %}
-            {% for bot_key, process in active_bots.items() %}
-                {% set status_info = statuses.get(bot_key, {}) %}
-                {% set match = status_info.get('match_info') %}
-                {% set t_id = bot_key.split('___')[0] %}
-                {% set player_name = bot_key.split('___')[1] %}
-                {% set clean_url_name = player_name.replace(' ', '') %}
-                
-                <div class="bot-item">
-                    <div>
-                        <strong>👤 {{ player_name }}</strong><br>
-                        <span class="tournament-title">🏆 {{ status_info.get('tournament_name', 'Chargement du nom...') }}</span><br>
-                        <small style="color: #666;">ID Tournoi: {{ t_id }}</small><br>
-                        
-                        <span class="badge">
-                            Ronde {{ status_info.get('current_round', '?') }} / {{ status_info.get('total_rounds', '?') }}
-                        </span>
-
-                        {% if match and match.get('opponent') %}
-                            <div class="match-details">
-                                <strong>Table {{ match.get('table') }}</strong> ({{ '♔ Blancs' if match.get('color') == 'Blancs' else '♚ Noirs' }})<br>
-                                vs 👥 <em>{{ match.get('opponent') }}</em>
-                            </div>
-                        {% else %}
-                            <div style="font-size: 12px; color: #888; margin-top: 6px;">
-                                ⏳ {{ status_info.get('status', 'En attente des appariements') }}
-                            </div>
-                        {% endif %}
-
-                        <a href="/player/{{ t_id }}/{{ clean_url_name }}" target="_blank" class="mobile-btn">📱 Lien Mobile</a>
-                    </div>
-                    <form method="POST" action="/stop" style="margin: 0;">
-                        <input type="hidden" name="bot_key" value="{{ bot_key }}">
-                        <button type="submit" class="stop-btn">Arrêter</button>
-                    </form>
-                </div>
-            {% endfor %}
-        {% endif %}
-
-        <h3 style="margin-top: 25px; color: #444;">📁 Historiques conservés</h3>
-        {% if not statuses %}
-            <p style="color: #888; font-size: 13px;">Aucun historique sauvegardé.</p>
-        {% else %}
-            {% for bot_key, data in statuses.items() %}
-                {% if bot_key not in active_bots %}
-                    {% set t_id = data.get('tournament_id') %}
-                    {% set player_name = data.get('user') %}
-                    {% set clean_url_name = player_name.replace(' ', '') %}
-                    <div class="archive-item">
-                        <div>
-                            <strong>{{ player_name }}</strong><br>
-                            <small style="color: #666;">{{ data.get('tournament_name') }} (ID: {{ t_id }})</small>
-                        </div>
-                        <a href="/player/{{ t_id }}/{{ clean_url_name }}" target="_blank" class="mobile-btn">📱 Voir Fiche</a>
-                    </div>
-                {% endif %}
-            {% endfor %}
-        {% endif %}
-    </div>
-</body>
-</html>
-"""
-
-PLAYER_MOBILE_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="fr">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <meta http-equiv="refresh" content="15">
-    <title>Suivi - {{ player }}</title>
-    <style>
-        body { font-family: system-ui, -apple-system, sans-serif; background: #eef2f5; margin: 0; padding: 15px; display: flex; justify-content: center; }
-        .card { background: white; border-radius: 16px; padding: 20px; width: 100%; max-width: 400px; box-shadow: 0 8px 20px rgba(0,0,0,0.08); }
-        .header { text-align: center; border-bottom: 2px solid #f0f0f0; padding-bottom: 15px; margin-bottom: 15px; }
-        .player-name { font-size: 22px; font-weight: bold; color: #1a1a1a; margin: 0; }
-        .tournament-name { font-size: 14px; color: #0056b3; font-weight: 600; margin-top: 5px; }
-        .round-badge { display: inline-block; background: #007bff; color: white; padding: 6px 14px; border-radius: 20px; font-size: 14px; font-weight: bold; margin-top: 10px; }
-        .points-badge { display: inline-block; background: #28a745; color: white; padding: 6px 14px; border-radius: 20px; font-size: 14px; font-weight: bold; margin-top: 10px; margin-left: 5px; }
-        
-        .match-card { background: #f8f9fa; border-radius: 12px; padding: 15px; border: 1px solid #e9ecef; margin-top: 15px; text-align: center; }
-        .table-number { font-size: 26px; font-weight: 800; color: #2d3748; margin-bottom: 5px; }
-        .piece-color { font-size: 18px; font-weight: 600; padding: 6px 14px; border-radius: 8px; display: inline-block; margin-bottom: 10px; }
-        .white-piece { background: #ffffff; color: #1a1a1a; border: 1px solid #ccc; }
-        .black-piece { background: #2d3748; color: #ffffff; }
-        .vs-label { font-size: 11px; color: #a0aec0; text-transform: uppercase; letter-spacing: 1px; font-weight: bold; }
-        .opponent-name { font-size: 18px; font-weight: bold; color: #2b6cb0; margin-top: 4px; }
-        
-        .history-section { margin-top: 25px; border-top: 2px solid #f0f0f0; padding-top: 15px; }
-        .history-title { font-size: 15px; font-weight: bold; color: #4a5568; margin-bottom: 12px; text-align: left; }
-        .history-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: #f8f9fa; border-radius: 8px; margin-bottom: 8px; font-size: 13px; border: 1px solid #edf2f7; }
-        .history-round { font-weight: bold; color: #007bff; }
-        .history-opponent { color: #2d3748; font-weight: 500; }
-        .res-badge { padding: 2px 8px; border-radius: 4px; font-weight: bold; font-size: 12px; }
-        .res-win { background: #d4edda; color: #155724; }
-        .res-draw { background: #e2e3e5; color: #383d41; }
-        .res-loss { background: #f8d7da; color: #721c24; }
-        .res-pending { background: #fff3cd; color: #856404; }
-        
-        .status-waiting { font-size: 15px; color: #718096; padding: 20px 0; text-align: center; }
-        .footer { text-align: center; font-size: 11px; color: #a0aec0; margin-top: 20px; }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <div class="header">
-            <h1 class="player-name">👤 {{ player }}</h1>
-            <div class="tournament-name">🏆 {{ status_info.get('tournament_name', 'Tournoi en cours') }}</div>
-            <div>
-                <div class="round-badge">
-                    {% if status_info.get('status') == 'Terminé' %}
-                        Tournoi Terminé
-                    {% else %}
-                        Ronde {{ status_info.get('current_round', '?') }} / {{ status_info.get('total_rounds', '?') }}
-                    {% endif %}
-                </div>
-                <div class="points-badge">
-                    ⭐ {{ points_display }} pt(s)
-                </div>
-            </div>
-        </div>
-
-        {% set match = status_info.get('match_info') %}
-        {% if match and match.get('opponent') and status_info.get('status') != 'Terminé' %}
-            <div class="match-card">
-                <div class="table-number">Echiquier N° {{ match.get('table') }}</div>
-                
-                {% if match.get('color') == 'Blancs' %}
-                    <div class="piece-color white-piece">♔ Pièces Blanches</div>
-                {% else %}
-                    <div class="piece-color black-piece">♚ Pièces Noires</div>
-                {% endif %}
-
-                <div class="vs-label">Adversaire Ronde {{ match.get('round', status_info.get('current_round')) }}</div>
-                <div class="opponent-name">{{ match.get('opponent') }}</div>
-            </div>
-        {% else %}
-            <div class="status-waiting">
-                {% if status_info.get('status') == 'Terminé' %}
-                    🏁 Bilan complet du tournoi ci-dessous
-                {% else %}
-                    ⏳ {{ status_info.get('status', 'En attente de la publication des appariements...') }}
-                {% endif %}
-            </div>
-        {% endif %}
-
-        {% set history = status_info.get('round_history', []) %}
-        {% if history %}
-            <div class="history-section">
-                <div class="history-title">📜 Historique des parties</div>
-                {% for item in history %}
-                    {% set res = item.get('result', 'En cours') %}
-                    <div class="history-item">
-                        <div>
-                            <span class="history-round">R. {{ item.get('round') }}</span>
-                            <span> (Ech. {{ item.get('table') }})</span><br>
-                            <span class="history-opponent">
-                                {{ '♔' if item.get('color') == 'Blancs' else '♚' }} vs {{ item.get('opponent') }}
-                            </span>
-                        </div>
-                        <div>
-                            {% if res == '1 - 0' %}
-                                <span class="res-badge res-win">1 - 0</span>
-                            {% elif res == '0 - 1' %}
-                                <span class="res-badge res-loss">0 - 1</span>
-                            {% elif res == '½ - ½' %}
-                                <span class="res-badge res-draw">½ - ½</span>
-                            {% else %}
-                                <span class="res-badge res-pending">En cours</span>
-                            {% endif %}
-                        </div>
-                    </div>
-                {% endfor %}
-            </div>
-        {% endif %}
-
-        <div class="footer">
-            Mis à jour automatiquement toutes les 15s
-        </div>
-    </div>
-</body>
-</html>
-"""
-
-# ---------------------------------------------------------------------------
 # LOGIQUE ET ROUTES FLASK
 # ---------------------------------------------------------------------------
 
@@ -412,8 +135,8 @@ def index():
         "dry_run": os.getenv("dry_run", "False"),
     }
 
-    return render_template_string(
-        DASHBOARD_TEMPLATE,
+    return render_template(
+        "index.html",
         active_bots=active_bots,
         statuses=statuses,
         defaults=defaults,
@@ -461,8 +184,8 @@ def player_view_slug(tournament_id, player_slug):
     total_pts = calculate_total_points(history)
     points_display = format_points(total_pts)
 
-    return render_template_string(
-        PLAYER_MOBILE_TEMPLATE,
+    return render_template(
+        "player_mobile.html",
         player=found_player_name,
         status_info=status_info,
         points_display=points_display,
