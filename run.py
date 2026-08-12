@@ -425,6 +425,13 @@ if __name__ == "__main__":
                 }
                 state["match_data"] = match_data
 
+                # Mettre à jour la ronde courante dans l'historique
+                existing_round_entry = next((item for item in state["history"] if item.get("round") == round_num), None)
+                if existing_round_entry:
+                    existing_round_entry.update(match_data)
+                else:
+                    state["history"].append(match_data)
+
                 if not state["pairing_sent"]:
                     state["pairing_sent"] = True
                     logger.info(f"[Pairings] Pairing found for {p_name} (Board {table_num}, {color} vs {opponent})")
@@ -440,7 +447,6 @@ if __name__ == "__main__":
                 else:
                     if not state["result_sent"]:
                         state["result_sent"] = True
-                        state["history"].append(match_data)
                         pts = calculate_total_points(state["history"])
                         delta, perf = calculate_elo_and_perf(player_elo, state["history"], k_factor)
                         
