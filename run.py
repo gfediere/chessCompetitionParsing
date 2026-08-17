@@ -43,8 +43,21 @@ os.makedirs(SUBSCRIPTIONS_DIR, exist_ok=True)
 
 SUBSCRIPTION_FILE = os.path.join(SUBSCRIPTIONS_DIR, f"sub_{tournament_id}.json")
 
+CATEGORY_NAMES = {
+    "pPoM": "Petit Poussin", "pPoF": "Petite Poussine",
+    "PouM": "Poussin", "PouF": "Poussine",
+    "PupM": "Pupille Masculin", "PupF": "Pupille Féminin",
+    "BenM": "Benjamin", "BenF": "Benjamine",
+    "MinM": "Minime Masculin", "MinF": "Minime Féminin",
+    "CadM": "Cadet", "CadF": "Cadette",
+    "JunM": "Junior Masculin", "JunF": "Junior Féminin",
+    "SenM": "Senior Masculin", "SenF": "Senior Féminin",
+    "SepM": "Senior Plus Masculin", "SepF": "Senior Plus Féminin",
+    "VetM": "Vétéran Masculin", "VetF": "Vétéran Féminin"
+}
+
 # ---------------------------------------------------------------------------
-# ELO & PERFORMANCE HELPERS
+# HELPERS
 # ---------------------------------------------------------------------------
 def clean_text(text: str) -> str:
     if not text:
@@ -53,11 +66,14 @@ def clean_text(text: str) -> str:
     return " ".join(text.split()).lower()
 
 def extract_elo(cell_text: str) -> int:
-    """Extrait le premier nombre à 3 ou 4 chiffres d'une cellule texte."""
     if not cell_text:
         return 0
     match = re.search(r'\b\d{3,4}\b', cell_text)
     return int(match.group(0)) if match else 0
+
+def get_category_full_name(cat_code: str) -> str:
+    clean_code = cat_code.strip()
+    return CATEGORY_NAMES.get(clean_code, clean_code)
 
 def calculate_total_points(round_history: list) -> float:
     total = 0.0
@@ -77,12 +93,10 @@ def format_points(points: float) -> str:
     return f"{points}"
 
 def get_expected_score(player_elo: float, opponent_elo: float) -> float:
-    """Calculates FIDE expected score based on Elo rating difference."""
     diff = opponent_elo - player_elo
     return 1.0 / (1.0 + 10.0 ** (diff / 400.0))
 
 def calculate_elo_and_perf(player_elo: float, round_history: list, k_factor: float = 20.0) -> tuple[float, int]:
-    """Calculates cumulative Delta Elo and FIDE Performance."""
     if not round_history or player_elo == 0:
         return 0.0, 0
 
@@ -192,7 +206,83 @@ def check_url(url: str, retries: int = 3) -> BeautifulSoup | None:
     logger.error(f"[HTTP GET] Unable to reach URL after {retries} attempts: {url}")
     return None
 
-def update_player_status(t_id, player_name, current_round, status, t_name, match_info, round_history, k_factor=20.0, player_elo=0):
+def fetch_final_rank(t_id: str, player_name: str) -> tuple[int, int, int, int, str, str]:
+    """
+    Scrapes Action=Cl FFE page to fetch overall rank, total players,
+    category rank, category total, category code, and category full name.
+    """
+    url_clas = f"https://www.echecs.asso.fr/Resultats.aspx?URL=Tournois/Id/{t_id}/{t_id}&Action=Cl"
+    soup = check_url(url_clas)
+    if not soup:
+        return 0, 0, 0, 0, "", ""
+
+    table = soup.find("table", id="TablePage")
+    if not table:
+        return 0, 0, 0, 0, "", ""
+
+    rows = table.find_all("tr")
+    if not rows or len(rows) < 2:
+        return 0, 0, 0, 0, "", ""
+
+    header_cells = [clean_text(el.text) for el in rows[0].find_all("td")]
+    cat_col_idx = -1
+    for i, h in enumerate(header_cells):
+        if "cat" in h:
+            cat_col_idx = i
+            break
+
+    data_rows = rows[1:]
+    total_players = len(data_rows)
+    clean_p = clean_text(player_name)
+    tokens = [w for w in clean_p.split() if len(w) > 2]
+
+    target_row_idx = -1
+    target_category = ""
+
+    parsed_players = []
+    for idx, row in enumerate(data_rows):
+        cells = [el.text.strip() for el in row.find_all("td")]
+        row_str = clean_text(" ".join(cells))
+        
+        cat_val = ""
+        if cat_col_idx != -1 and len(cells) > cat_col_idx:
+            cat_candidate = cells[cat_col_idx].strip()
+            if not cat_candidate.isdigit() and len(cat_candidate) in [3, 4]:
+                cat_val = cat_candidate
+
+        if not cat_val:
+            for cell in cells:
+                c_clean = cell.strip()
+                if c_clean in CATEGORY_NAMES or (len(c_clean) in [3, 4] and c_clean.endswith(('M', 'F')) and not c_clean.isdigit()):
+                    cat_val = c_clean
+                    break
+
+        parsed_players.append({"cells": cells, "row_str": row_str, "cat": cat_val})
+
+        if all(t in row_str for t in tokens):
+            target_row_idx = idx
+            target_category = cat_val
+
+    if target_row_idx == -1:
+        return 0, total_players, 0, 0, "", ""
+
+    rank_str = parsed_players[target_row_idx]["cells"][0].replace(".", "").strip()
+    rank = int(rank_str) if rank_str.isdigit() else (target_row_idx + 1)
+
+    cat_rank = 0
+    cat_total = 0
+    if target_category:
+        for p in parsed_players:
+            if p["cat"].strip().lower() == target_category.strip().lower():
+                cat_total += 1
+                if cat_rank == 0 and all(t in p["row_str"] for t in tokens):
+                    cat_rank = cat_total
+
+    cat_full_name = get_category_full_name(target_category) if target_category else ""
+
+    return rank, total_players, cat_rank, cat_total, target_category, cat_full_name
+
+def update_player_status(t_id, player_name, current_round, status, t_name, match_info, round_history, k_factor=20.0, player_elo=0, final_rank=0, total_players=0, cat_rank=0, cat_total=0, cat_code="", cat_full_name=""):
     clean_player = player_name.replace(" ", "_")
     status_file = os.path.join(DATA_DIR, f"status_{t_id}_{clean_player}.json")
     
@@ -210,8 +300,14 @@ def update_player_status(t_id, player_name, current_round, status, t_name, match
         "current_round": current_round,
         "total_rounds": round_total,
         "status": status,
+        "final_rank": final_rank,
+        "total_players": total_players,
+        "category_rank": cat_rank,
+        "category_total": cat_total,
+        "category_code": cat_code,
+        "category_name": cat_full_name,
         "current_points": current_points,
-        "match_info": match_info,
+        "match_info": match_info if status != "Terminé" else None,
         "round_history": round_history,
     }
     try:
@@ -233,7 +329,6 @@ def tournament_name(tourn_id: str) -> str:
     return "Unknown Tournament"
 
 def catchup_player_history(p_name: str, p_cfg: dict, current_round: int, t_name: str) -> tuple[list, int]:
-    """Fetches past rounds history for a player added mid-tournament."""
     logger.info(f"[Catchup] Fetching history for rounds 1 to {current_round - 1} for '{p_name}'...")
     
     clean_p = clean_text(p_name)
@@ -425,13 +520,6 @@ if __name__ == "__main__":
                 }
                 state["match_data"] = match_data
 
-                # Mettre à jour la ronde courante dans l'historique
-                existing_round_entry = next((item for item in state["history"] if item.get("round") == round_num), None)
-                if existing_round_entry:
-                    existing_round_entry.update(match_data)
-                else:
-                    state["history"].append(match_data)
-
                 if not state["pairing_sent"]:
                     state["pairing_sent"] = True
                     logger.info(f"[Pairings] Pairing found for {p_name} (Board {table_num}, {color} vs {opponent})")
@@ -447,6 +535,7 @@ if __name__ == "__main__":
                 else:
                     if not state["result_sent"]:
                         state["result_sent"] = True
+                        state["history"].append(match_data)
                         pts = calculate_total_points(state["history"])
                         delta, perf = calculate_elo_and_perf(player_elo, state["history"], k_factor)
                         
@@ -459,7 +548,19 @@ if __name__ == "__main__":
                         )
                         push_over(p_cfg, res_msg)
 
-                    update_player_status(tournament_id, p_name, round_num, "Partie terminée", t_name, match_data, state["history"], k_factor, player_elo)
+                    final_rank, total_players, cat_rank, cat_total, cat_code, cat_full_name = 0, 0, 0, 0, "", ""
+                    current_status = "Partie terminée"
+                    
+                    if round_num == round_total:
+                        current_status = "Terminé"
+                        final_rank, total_players, cat_rank, cat_total, cat_code, cat_full_name = fetch_final_rank(tournament_id, p_name)
+                        logger.info(f"[Final Rank] {p_name} finished {final_rank}/{total_players} overall ({cat_rank}/{cat_total} in {cat_full_name}) in Tournament ID {tournament_id}")
+
+                    update_player_status(
+                        tournament_id, p_name, round_num, current_status, t_name, match_data,
+                        state["history"], k_factor, player_elo, final_rank, total_players,
+                        cat_rank, cat_total, cat_code, cat_full_name
+                    )
 
             if all_pairings_found and all_results_found:
                 round_completed_for_all = True

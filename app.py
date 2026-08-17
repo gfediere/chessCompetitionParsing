@@ -162,6 +162,12 @@ def get_statuses():
                             "current_points": 0.0,
                             "delta_elo": 0.0,
                             "performance": 0,
+                            "final_rank": 0,
+                            "total_players": 0,
+                            "category_rank": 0,
+                            "category_total": 0,
+                            "category_code": "",
+                            "category_name": "",
                             "match_info": None,
                             "round_history": []
                         }
@@ -252,6 +258,12 @@ def player_view_slug(tournament_id, player_slug):
                     "current_points": 0.0,
                     "delta_elo": 0.0,
                     "performance": 0,
+                    "final_rank": 0,
+                    "total_players": 0,
+                    "category_rank": 0,
+                    "category_total": 0,
+                    "category_code": "",
+                    "category_name": "",
                     "match_info": None,
                     "round_history": []
                 }

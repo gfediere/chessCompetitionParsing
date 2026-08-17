@@ -31,6 +31,12 @@
         .opponent-name { font-size: 18px; font-weight: bold; color: #2b6cb0; margin-top: 4px; }
         .opponent-elo { font-size: 13px; color: #718096; margin-top: 2px; font-weight: 500; }
         
+        .final-ranks-container { display: flex; gap: 10px; margin-top: 15px; }
+        .final-rank-box { flex: 1; background: #f4fff6; border: 1px solid #28a745; border-radius: 12px; padding: 12px; text-align: center; }
+        .final-rank-title { font-size: 11px; color: #1e7e34; font-weight: bold; text-transform: uppercase; }
+        .final-rank-value { font-size: 24px; font-weight: 800; color: #1e7e34; margin: 4px 0; }
+        .final-rank-sub { font-size: 12px; color: #6c757d; font-weight: normal; }
+
         .history-section { margin-top: 25px; border-top: 2px solid #f0f0f0; padding-top: 15px; }
         .history-title { font-size: 15px; font-weight: bold; color: #4a5568; margin-bottom: 12px; text-align: left; }
         .history-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: #f8f9fa; border-radius: 8px; margin-bottom: 8px; font-size: 13px; border: 1px solid #edf2f7; }
@@ -86,7 +92,46 @@
         </div>
 
         {% set match = status_info.get('match_info') %}
-        {% if match and match.get('opponent') and status_info.get('status') != 'Terminé' %}
+        
+        <!-- SI LE TOURNOI EST TERMINÉ : AFFICHER CLASSEMENT GÉNÉRAL + CATÉGORIE AVEC RACCOURCI -->
+        {% if status_info.get('status') == 'Terminé' %}
+            <div class="final-ranks-container">
+                <!-- Classement Général -->
+                <div class="final-rank-box">
+                    <div class="final-rank-title">🏆 Général</div>
+                    {% set rank = status_info.get('final_rank', 0) %}
+                    {% set total_p = status_info.get('total_players', 0) %}
+                    {% if rank > 0 %}
+                        <div class="final-rank-value">
+                            {{ rank }}<span style="font-size: 16px;">{% if rank == 1 %}er{% else %}e{% endif %}</span>
+                        </div>
+                        <div class="final-rank-sub">sur {{ total_p }}</div>
+                    {% else %}
+                        <div class="final-rank-value" style="font-size: 16px;">Fin du tournoi</div>
+                    {% endif %}
+                </div>
+
+                <!-- Classement par Catégorie -->
+                {% set c_rank = status_info.get('category_rank', 0) %}
+                {% set c_total = status_info.get('category_total', 0) %}
+                {% set c_code = status_info.get('category_code', '') %}
+                {% set c_name = status_info.get('category_name', '') %}
+                
+                {% if c_rank > 0 and c_total > 0 %}
+                    <div class="final-rank-box" style="background: #eff6ff; border-color: #007bff;">
+                        <div class="final-rank-title" style="color: #0056b3;">
+                            🎖️ {% if c_name and c_code and c_name != c_code %}{{ c_name }} ({{ c_code }}){% elif c_name %}{{ c_name }}{% else %}{{ c_code }}{% endif %}
+                        </div>
+                        <div class="final-rank-value" style="color: #0056b3;">
+                            {{ c_rank }}<span style="font-size: 16px;">{% if c_rank == 1 %}er{% else %}e{% endif %}</span>
+                        </div>
+                        <div class="final-rank-sub">sur {{ c_total }}</div>
+                    </div>
+                {% endif %}
+            </div>
+
+        <!-- PENDANT LE TOURNOI -->
+        {% elif match and match.get('opponent') %}
             <div class="match-card">
                 <div class="table-number">Echiquier N° {{ match.get('table') }}</div>
                 
@@ -104,11 +149,7 @@
             </div>
         {% else %}
             <div class="status-waiting">
-                {% if status_info.get('status') == 'Terminé' %}
-                    🏁 Bilan complet du tournoi ci-dessous
-                {% else %}
-                    ⏳ {{ status_info.get('status', 'En attente de la publication des appariements...') }}
-                {% endif %}
+                ⏳ {{ status_info.get('status', 'En attente de la publication des appariements...') }}
             </div>
         {% endif %}
 
