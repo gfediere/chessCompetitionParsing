@@ -1,10 +1,14 @@
+from datetime import datetime
 import glob
+import html
 import json
 import logging
 import os
 import re
 import subprocess
 import sys
+import threading
+import time
 import unicodedata
 import requests
 from bs4 import BeautifulSoup
@@ -31,15 +35,29 @@ active_bots = {}
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 SUBSCRIPTIONS_DIR = os.path.join(BASE_DIR, "subscriptions")
+TOURNAMENTS_CACHE_FILE = os.path.join(DATA_DIR, "tournaments_cache.json")
 
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(SUBSCRIPTIONS_DIR, exist_ok=True)
 
 
+def fix_encoding(text: str) -> str:
+    """Répare les entités HTML et les doubles encodages UTF-8 (ex: VallÃ©e -> Vallée)."""
+    if not text:
+        return ""
+    text = html.unescape(text)
+    try:
+        text = text.encode("iso-8859-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        pass
+    return " ".join(text.replace("\xa0", " ").split())
+
+
 def clean_text(text: str) -> str:
     if not text:
         return ""
-    text = unicodedata.normalize("NFKD", text).replace("\xa0", " ")
+    text = fix_encoding(text)
+    text = unicodedata.normalize("NFKD", text)
     return " ".join(text.split()).lower()
 
 
@@ -177,20 +195,238 @@ def get_statuses():
     return statuses
 
 
+# ---------------------------------------------------------------------------
+# JSON CACHE SYSTEM FOR TOURNAMENTS
+# ---------------------------------------------------------------------------
+def load_cached_tournaments() -> list:
+    if os.path.exists(TOURNAMENTS_CACHE_FILE):
+        try:
+            with open(TOURNAMENTS_CACHE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"[Cache] Error loading {TOURNAMENTS_CACHE_FILE}: {e}")
+    return []
+
+
+def fetch_and_cache_tournaments():
+    """Récupère l'intégralité des tournois FFE par département et les sauvegarde dans data/tournaments_cache.json."""
+    logger.info("[Cache] Synchronisation globale du calendrier FFE (par département)...")
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    }
+
+    tournaments = []
+    seen_ids = set()
+
+    departments = [
+        "01", "02", "03", "04", "05", "06", "07", "08", "09", "10",
+        "11", "12", "13", "14", "15", "16", "17", "18", "19", "2A", "2B",
+        "21", "22", "23", "24", "25", "26", "27", "28", "29", "30",
+        "31", "32", "33", "34", "35", "36", "37", "38", "39", "40",
+        "41", "42", "43", "44", "45", "46", "47", "48", "49", "50",
+        "51", "52", "53", "54", "55", "56", "57", "58", "59", "60",
+        "61", "62", "63", "64", "65", "66", "67", "68", "69", "70",
+        "71", "72", "73", "74", "75", "76", "77", "78", "79", "80",
+        "81", "82", "83", "84", "85", "86", "87", "88", "89", "90",
+        "91", "92", "93", "94", "95", "971", "972", "973", "974", "976"
+    ]
+
+    for dept in departments:
+        url = f"https://www.echecs.asso.fr/ListeTournois.aspx?Action=TOURNOICOMITE&ComiteRef={dept}"
+        try:
+            resp = requests.get(url, headers=headers, timeout=8)
+            resp.encoding = resp.apparent_encoding or 'utf-8'
+            if resp.status_code != 200:
+                continue
+
+            soup = BeautifulSoup(resp.content, "html.parser", from_encoding=resp.encoding)
+            table = soup.find("table", id="TablePage") or soup.find("table", id="ctl00_ContentPlaceHolderMain_TableCalendrier")
+            if not table:
+                for t in soup.find_all("table"):
+                    if t.find("a", href=re.compile(r'(FicheTournoi\.aspx\?Ref=\d+|Resultats\.aspx\?URL=Tournois/Id/\d+)')):
+                        table = t
+                        break
+
+            if not table:
+                continue
+
+            rows = table.find_all("tr")[1:]
+            for row in rows:
+                cells = [fix_encoding(el.text) for el in row.find_all("td")]
+                if not cells or len(cells) < 2:
+                    continue
+
+                link_tag = row.find("a", href=re.compile(r'(FicheTournoi\.aspx\?Ref=\d+|Resultats\.aspx\?URL=Tournois/Id/\d+)'))
+                if link_tag:
+                    href = link_tag.get("href", "")
+                    ref_match = re.search(r'(?:Ref=|Id/)(\d+)', href)
+                    if ref_match:
+                        tourn_id = ref_match.group(1)
+                        if tourn_id in seen_ids:
+                            continue
+                        seen_ids.add(tourn_id)
+
+                        title = fix_encoding(link_tag.text)
+                        location = cells[1] if len(cells) > 1 else ""
+                        dept_cell = cells[2] if len(cells) > 2 else dept
+                        dates = cells[4] if len(cells) > 4 else (cells[3] if len(cells) > 3 else "")
+
+                        tournaments.append({
+                            "id": tourn_id,
+                            "title": title,
+                            "location": location,
+                            "dept": dept_cell,
+                            "dates": dates
+                        })
+        except Exception as e:
+            logger.debug(f"[Cache] Erreur lors du scraping du dép {dept}: {e}")
+
+    if tournaments:
+        with open(TOURNAMENTS_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(tournaments, f, ensure_ascii=False, indent=2)
+        logger.info(f"[Cache] Synchronisation globale réussie : {len(tournaments)} tournois enregistrés dans {TOURNAMENTS_CACHE_FILE}")
+    else:
+        logger.warning("[Cache] Aucun tournoi extrait de la FFE")
+
+
+def schedule_tournament_sync():
+    """Syncs immediately if cache is missing, then every 6 hours."""
+    def worker():
+        if not os.path.exists(TOURNAMENTS_CACHE_FILE):
+            fetch_and_cache_tournaments()
+        while True:
+            time.sleep(6 * 3600)
+            fetch_and_cache_tournaments()
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+
+
+schedule_tournament_sync()
+
+
+# ---------------------------------------------------------------------------
+# ROUTES
+# ---------------------------------------------------------------------------
 @app.route("/")
 def index():
     clean_dead_processes()
     statuses = get_statuses()
+    
+    is_admin = (request.args.get("admin") == "1")
+
+    last_sync = "Jamais"
+    if os.path.exists(TOURNAMENTS_CACHE_FILE):
+        try:
+            mtime = os.path.getmtime(TOURNAMENTS_CACHE_FILE)
+            last_sync = datetime.fromtimestamp(mtime).strftime("%d/%m/%Y à %H:%M")
+        except Exception:
+            pass
+
     defaults = {
         "tournament_id": os.getenv("tournament_id", ""),
         "user": os.getenv("user", ""),
-        "SERVER_URL": os.getenv("SERVER_URL", "https://chess-bot.fedallica.fr"),
         "rounds": os.getenv("rounds", "7"),
         "pushover_app_token": os.getenv("pushover_app_token", ""),
         "pushover_user_key": os.getenv("pushover_user_key", ""),
         "dry_run": os.getenv("dry_run", "False"),
     }
-    return render_template("index.html", active_bots=active_bots, statuses=statuses, defaults=defaults)
+    return render_template(
+        "index.html", 
+        active_bots=active_bots, 
+        statuses=statuses, 
+        defaults=defaults, 
+        last_sync=last_sync,
+        is_admin=is_admin
+    )
+
+
+@app.route("/api/get_tournament_details/<t_id>")
+def get_tournament_details(t_id):
+    url = f"https://www.echecs.asso.fr/FicheTournoi.aspx?Ref={t_id}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    }
+
+    rounds = None
+    try:
+        resp = requests.get(url, headers=headers, timeout=5)
+        resp.encoding = resp.apparent_encoding or 'utf-8'
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.content, "html.parser", from_encoding=resp.encoding)
+            page_text = fix_encoding(soup.get_text())
+
+            match = re.search(r'(?:nbr|nombre)?\s*de?\s*rondes?\s*[:\s]*(\d+)', page_text, re.IGNORECASE)
+            if not match:
+                match = re.search(r'(\d+)\s*rondes?', page_text, re.IGNORECASE)
+
+            if match:
+                rounds = int(match.group(1))
+    except Exception as e:
+        logger.error(f"[Details] Error fetching details for tournament {t_id}: {e}")
+
+    return {"id": t_id, "rounds": rounds}
+
+
+@app.route("/api/search_tournaments")
+def search_tournaments():
+    query = request.args.get("q", "").strip().lower()
+    dept = request.args.get("dept", "").strip()
+    month_filter = request.args.get("date", "").strip().lower()
+
+    cached_list = load_cached_tournaments()
+    results = []
+
+    for t in cached_list:
+        full_text = f"{t.get('title', '')} {t.get('location', '')} {t.get('dept', '')} {t.get('dates', '')}".lower()
+
+        if dept:
+            dept_code = dept.zfill(2) if (dept.isdigit() and len(dept) == 1) else dept
+            if dept_code not in full_text:
+                continue
+
+        if query:
+            if not all(token in full_text for token in query.split()):
+                continue
+
+        if month_filter:
+            month_map = {
+                "janvier": ["janv", "01/"], "février": ["fevr", "02/"], "mars": ["mars", "03/"],
+                "avril": ["avr", "04/"], "mai": ["mai", "05/"], "juin": ["juin", "06/"],
+                "juillet": ["juil", "07/"], "août": ["aout", "août", "08/"], "septembre": ["sept", "09/"],
+                "octobre": ["oct", "10/"], "novembre": ["nov", "11/"], "décembre": ["déc", "dec", "12/"]
+            }
+
+            matched_month = False
+            search_terms = month_map.get(month_filter, [month_filter])
+            for term in search_terms:
+                if term in full_text:
+                    matched_month = True
+                    break
+
+            if not matched_month:
+                continue
+
+        results.append({
+            "id": t["id"],
+            "title": t["title"],
+            "location": f"{t['location']} ({t['dept']})" if t.get('dept') else t['location'],
+            "dates": t["dates"]
+        })
+
+        if len(results) >= 15:
+            break
+
+    return {"tournaments": results}
+
+
+@app.route("/api/sync_now", methods=["POST"])
+def sync_now():
+    """Forces immediate JSON cache refresh."""
+    threading.Thread(target=fetch_and_cache_tournaments, daemon=True).start()
+    flash("Actualisation globale du calendrier FFE lancée en arrière-plan !")
+    return redirect(url_for("index"))
 
 
 @app.route("/api/active_bots")
@@ -317,6 +553,7 @@ def start():
     provider = request.form.get("notification_provider", "none").strip()
     enable_pushover = (provider == "pushover")
     k_factor = float(request.form.get("k_factor", "20"))
+    server_url = os.getenv("SERVER_URL", "https://chess-bot.fedallica.fr")
 
     sub = get_tournament_subscription(tournament_id)
     sub["tournament_id"] = tournament_id
@@ -327,7 +564,7 @@ def start():
         "enable_pushover": enable_pushover,
         "pushover_app_token": request.form.get("pushover_app_token", "").strip() if enable_pushover else "",
         "pushover_user_key": request.form.get("pushover_user_key", "").strip() if enable_pushover else "",
-        "SERVER_URL": request.form.get("SERVER_URL", "https://chess-bot.fedallica.fr").strip(),
+        "SERVER_URL": server_url,
         "dry_run": bool(request.form.get("dry_run"))
     }
     save_tournament_subscription(tournament_id, sub)

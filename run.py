@@ -216,7 +216,14 @@ def fetch_final_rank(t_id: str, player_name: str) -> tuple[int, int, int, int, s
     if not soup:
         return 0, 0, 0, 0, "", ""
 
-    table = soup.find("table", id="TablePage")
+    table = soup.find("table", id="TablePage") or soup.find("table", id="ctl00_ContentPlaceHolderMain_TableCalendrier")
+    if not table:
+        tables = soup.find_all("table")
+        for t in tables:
+            if t.find("td") and ("cat" in clean_text(t.text) or "rg" in clean_text(t.text)):
+                table = t
+                break
+
     if not table:
         return 0, 0, 0, 0, "", ""
 
