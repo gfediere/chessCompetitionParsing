@@ -196,10 +196,13 @@
                 <label>ID Tournoi (tournament_id)</label>
                 <input type="text" id="tournament_id" name="tournament_id" value="{{ defaults.tournament_id }}" required placeholder="ex: 63375">
             </div>
-            <div class="form-group">
+            
+            <div class="form-group" style="position: relative;">
                 <label>Nom du Joueur (user)</label>
-                <input type="text" name="user" value="{{ defaults.user }}" required placeholder="ex: NOM Prenom">
+                <input type="text" id="user_input" name="user" value="{{ defaults.user }}" required autocomplete="off" placeholder="Sélectionnez un tournoi pour charger les joueurs..." oninput="filterPlayers()">
+                <div id="player_suggestions" style="display:none; position: absolute; top: 100%; left: 0; right: 0; background: white; border: 1px solid #ccc; border-radius: 4px; max-height: 180px; overflow-y: auto; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,0.15);"></div>
             </div>
+
             <div class="form-group">
                 <label>Nombre de rondes (détection automatique)</label>
                 <input type="number" name="rounds" value="{{ defaults.rounds }}" required readonly placeholder="Sélectionnez un tournoi pour détecter">
@@ -323,6 +326,7 @@
 
     <script>
         const isAdmin = {{ 'true' if is_admin else 'false' }};
+        let currentTournamentPlayers = [];
 
         function toggleNotificationProvider(provider) {
             const pushoverBox = document.getElementById('pushover_options');
@@ -393,32 +397,88 @@
             document.getElementById('search_query').value = title;
             document.getElementById('tournament_suggestions').style.display = 'none';
 
+            // 1. Extraction des rondes
             const roundsInput = document.querySelector('input[name="rounds"]');
             if (roundsInput) {
                 roundsInput.value = "";
-                roundsInput.placeholder = "Détection du nombre de rondes...";
+                roundsInput.placeholder = "Détection des rondes...";
                 
                 try {
                     const resp = await fetch(`/api/get_tournament_details/${id}`);
                     if (resp.ok) {
                         const data = await resp.json();
-                        if (data.rounds) {
-                            roundsInput.value = data.rounds;
-                        } else {
-                            roundsInput.placeholder = "7 (défaut)";
-                            roundsInput.value = 7;
-                        }
+                        roundsInput.value = data.rounds || 7;
                     }
                 } catch (err) {
-                    console.error("Erreur lors de la récupération des détails du tournoi:", err);
                     roundsInput.value = 7;
                 }
             }
+
+            // 2. Extraction/Chargement des joueurs
+            const userInput = document.getElementById('user_input');
+            if (userInput) {
+                userInput.value = "";
+                userInput.placeholder = "Chargement des joueurs inscrits...";
+                currentTournamentPlayers = [];
+                
+                try {
+                    const resp = await fetch(`/api/get_tournament_players/${id}`);
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        currentTournamentPlayers = data.players || [];
+                        if (currentTournamentPlayers.length > 0) {
+                            userInput.placeholder = `Tapez pour chercher parmi ${currentTournamentPlayers.length} joueur(s)...`;
+                        } else {
+                            userInput.placeholder = "Saisissez votre NOM Prénom...";
+                        }
+                    }
+                } catch (err) {
+                    userInput.placeholder = "Saisissez votre NOM Prénom...";
+                }
+            }
+        }
+
+        function filterPlayers() {
+            const query = document.getElementById('user_input').value.trim().toLowerCase();
+            const container = document.getElementById('player_suggestions');
+
+            if (!query || currentTournamentPlayers.length === 0) {
+                container.style.display = 'none';
+                return;
+            }
+
+            const matches = currentTournamentPlayers.filter(p => p.toLowerCase().includes(query)).slice(0, 10);
+
+            if (matches.length === 0) {
+                container.style.display = 'none';
+                return;
+            }
+
+            let html = '';
+            matches.forEach(p => {
+                html += `<div style="padding: 8px 12px; cursor: pointer; font-size: 13px;" 
+                              onclick="selectPlayer('${p.replace(/'/g, "\\'")}')"
+                              onmouseover="this.style.background='#f0f7ff'" 
+                              onmouseout="this.style.background='white'">
+                            👤 <strong>${p}</strong>
+                         </div>`;
+            });
+
+            container.innerHTML = html;
+            container.style.display = 'block';
+        }
+
+        function selectPlayer(name) {
+            document.getElementById('user_input').value = name;
+            document.getElementById('player_suggestions').style.display = 'none';
         }
 
         document.addEventListener('click', function(e) {
             if (!e.target.closest('#search_dept') && !e.target.closest('#search_query') && !e.target.closest('#search_date') && !e.target.closest('#tournament_suggestions')) {
                 document.getElementById('tournament_suggestions').style.display = 'none';
+            }
+            if (!e.target.closest('#user_input') && !e.target.closest('#player_suggestions')) {
+                document.getElementById('player_suggestions').style.display = 'none';
             }
         });
 

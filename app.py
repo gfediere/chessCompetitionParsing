@@ -196,7 +196,7 @@ def get_statuses():
 
 
 # ---------------------------------------------------------------------------
-# JSON CACHE SYSTEM FOR TOURNAMENTS
+# JSON CACHE SYSTEM FOR TOURNAMENTS & PLAYERS
 # ---------------------------------------------------------------------------
 def load_cached_tournaments() -> list:
     if os.path.exists(TOURNAMENTS_CACHE_FILE):
@@ -206,6 +206,65 @@ def load_cached_tournaments() -> list:
         except Exception as e:
             logger.error(f"[Cache] Error loading {TOURNAMENTS_CACHE_FILE}: {e}")
     return []
+
+
+def scrape_and_cache_players_for_tournament(t_id: str) -> list:
+    """Scrape la liste des joueurs d'un tournoi et la sauvegarde dans data/players_<t_id>.json."""
+    players_cache_file = os.path.join(DATA_DIR, f"players_{t_id}.json")
+    
+    url = f"https://www.echecs.asso.fr/Resultats.aspx?URL=Tournois/Id/{t_id}/{t_id}&Action=GA"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    }
+
+    players = []
+    seen_keys = set()
+
+    try:
+        resp = requests.get(url, headers=headers, timeout=8)
+        resp.encoding = resp.apparent_encoding or 'utf-8'
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.content, "html.parser", from_encoding=resp.encoding)
+            table = soup.find("table", id="TablePage") or soup.find("table", id="ctl00_ContentPlaceHolderMain_TableCalendrier")
+            
+            if not table:
+                for t in soup.find_all("table"):
+                    if t.find("td"):
+                        table = t
+                        break
+
+            if table:
+                rows = table.find_all("tr")[1:]
+                for row in rows:
+                    row_text = fix_encoding(row.text)
+
+                    # Expression régulière stricte pour capturer : NOM (MAJUSCULES) suivi de Prénom (Capitalisé)
+                    # Exemples capturés : "FEDIERE Lucie", "DE LA MOTTE Antoine", "VAPORISYAN Levon-Alexandre"
+                    match = re.search(r'([A-Z\s\-\']{2,25}\s+[A-ZÀ-ÖØ-ß][a-zà-öø-ÿ\-\']+)', row_text)
+                    if match:
+                        clean_name = " ".join(match.group(1).split())
+                        
+                        # Sécurité : ignorer les faux positifs (ex: mots-clés d'en-tête ou de clubs en majuscules)
+                        if len(clean_name) > 3 and not any(kw in clean_name for kw in ["Ronde", "Table", "Fide", "Club"]):
+                            key = clean_name.lower()
+                            if key not in seen_keys:
+                                seen_keys.add(key)
+                                players.append(clean_name)
+
+    except Exception as e:
+        logger.error(f"[Players] Erreur lors du scraping des joueurs pour {t_id}: {e}")
+
+    payload = {"id": t_id, "players": sorted(players)}
+
+    if players:
+        try:
+            with open(players_cache_file, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+            logger.info(f"[Cache/Players] Sauvegardé {len(players)} joueur(s) propres dans {players_cache_file}")
+        except Exception as e:
+            logger.error(f"[Cache/Players] Erreur écriture cache joueurs {t_id}: {e}")
+
+    return sorted(players)
 
 
 def fetch_and_cache_tournaments():
@@ -367,6 +426,22 @@ def get_tournament_details(t_id):
         logger.error(f"[Details] Error fetching details for tournament {t_id}: {e}")
 
     return {"id": t_id, "rounds": rounds}
+
+
+@app.route("/api/get_tournament_players/<t_id>")
+def get_tournament_players(t_id):
+    """Lecture du cache local des joueurs du tournoi ou scraping si absent."""
+    players_cache_file = os.path.join(DATA_DIR, f"players_{t_id}.json")
+
+    if os.path.exists(players_cache_file):
+        try:
+            with open(players_cache_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+
+    players = scrape_and_cache_players_for_tournament(t_id)
+    return {"id": t_id, "players": players}
 
 
 @app.route("/api/search_tournaments")
