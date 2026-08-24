@@ -12,7 +12,7 @@ import time
 import unicodedata
 import requests
 from bs4 import BeautifulSoup
-from flask import Flask, flash, redirect, render_template, request, url_for
+from flask import Flask, flash, redirect, render_template, request, url_for, send_from_directory
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -38,6 +38,8 @@ PLAYERS_DIR = os.path.join(DATA_DIR, "players")
 CACHE_DIR = os.path.join(DATA_DIR, "cache")
 SUBSCRIPTIONS_DIR = os.path.join(BASE_DIR, "subscriptions")
 TOURNAMENTS_CACHE_FILE = os.path.join(CACHE_DIR, "tournaments_cache.json")
+
+VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "").strip().strip('"').strip("'")
 
 os.makedirs(PLAYERS_DIR, exist_ok=True)
 os.makedirs(CACHE_DIR, exist_ok=True)
@@ -263,7 +265,7 @@ def scrape_and_cache_players_for_tournament(t_id: str) -> list:
 
 
 def fetch_and_cache_tournaments():
-    logger.info("[Cache] Synchronisation globale du calendrier FFE (par département)...")
+    logger.info("[Cache] Synchronisation globale du calendrier (par département)...")
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -340,7 +342,7 @@ def fetch_and_cache_tournaments():
             json.dump(tournaments, f, ensure_ascii=False, indent=2)
         logger.info(f"[Cache] Synchronisation globale réussie : {len(tournaments)} tournois enregistrés dans {TOURNAMENTS_CACHE_FILE}")
     else:
-        logger.warning("[Cache] Aucun tournoi extrait de la FFE")
+        logger.warning("[Cache] Aucun tournoi extrait")
 
 
 def schedule_tournament_sync():
@@ -361,6 +363,11 @@ schedule_tournament_sync()
 # ---------------------------------------------------------------------------
 # ROUTES
 # ---------------------------------------------------------------------------
+@app.route('/sw.js')
+def service_worker():
+    return send_from_directory('static', 'sw.js', mimetype='application/javascript')
+
+
 @app.route("/")
 def index():
     clean_dead_processes()
@@ -491,8 +498,29 @@ def search_tournaments():
 @app.route("/api/sync_now", methods=["POST"])
 def sync_now():
     threading.Thread(target=fetch_and_cache_tournaments, daemon=True).start()
-    flash("Actualisation globale du calendrier FFE lancée en arrière-plan !")
+    flash("Actualisation globale du calendrier lancée en arrière-plan !")
     return redirect(url_for("index"))
+
+
+@app.route("/api/subscribe_webpush", methods=["POST"])
+def subscribe_webpush():
+    data = request.json
+    t_id = str(data.get("tournament_id", "")).strip()
+    player_name = str(data.get("player", "")).strip()
+    push_subscription = data.get("subscription")
+
+    if not t_id or not player_name or not push_subscription:
+        return {"status": "error", "message": "Données manquantes"}, 400
+
+    sub = get_tournament_subscription(t_id)
+    if player_name in sub.get("players", {}):
+        sub["players"][player_name]["webpush_subscription"] = push_subscription
+        sub["players"][player_name]["enable_webpush"] = True
+        save_tournament_subscription(t_id, sub)
+        logger.info(f"[WebPush] Souscription enregistrée pour {player_name} (Tournoi {t_id})")
+        return {"status": "success"}
+
+    return {"status": "error", "message": "Joueur non trouvé"}, 404
 
 
 @app.route("/api/active_bots")
@@ -504,14 +532,20 @@ def api_active_bots():
     for bot_key, data in statuses.items():
         t_id = data.get("tournament_id")
         if t_id in active_bots:
+            # Récupération sécurisée du nom du joueur
             player_name = data.get("user", "")
+            if not player_name and "___" in bot_key:
+                player_name = bot_key.split("___", 1)[1]
+
+            clean_slug = player_name.replace(" ", "").replace("_", "") if player_name else "joueur"
+
             active_data.append({
                 "bot_key": bot_key,
                 "tournament_id": t_id,
                 "tournament_name": data.get("tournament_name", "Chargement du nom..."),
-                "user": player_name,
+                "user": player_name or "Joueur inconnu",
                 "k_factor": data.get("k_factor", 20),
-                "clean_url_name": player_name.replace(" ", "").replace("_", ""),
+                "clean_url_name": clean_slug,
                 "current_round": data.get("current_round", "?"),
                 "total_rounds": data.get("total_rounds", "?"),
                 "status": data.get("status", "En attente des appariements"),
@@ -579,7 +613,8 @@ def player_view_slug(tournament_id, player_slug):
             "player_mobile.html",
             player=player_slug,
             status_info={"status": "Joueur ou tournoi introuvable"},
-            points_display="0"
+            points_display="0",
+            vapid_public_key=VAPID_PUBLIC_KEY
         ), 404
 
     if target_filepath and os.path.exists(target_filepath):
@@ -609,6 +644,7 @@ def player_view_slug(tournament_id, player_slug):
         player=found_player_name,
         status_info=status_info,
         points_display=points_display,
+        vapid_public_key=VAPID_PUBLIC_KEY
     )
 
 

@@ -91,12 +91,16 @@
             </div>
         </div>
 
+        <div id="push-notification-banner" style="display: none; margin-bottom: 15px; text-align: center;">
+            <button id="btn-enable-push" onclick="subscribeToWebPush()" style="background: #007bff; color: white; border: none; padding: 10px 16px; border-radius: 8px; font-weight: bold; width: 100%; cursor: pointer;">
+                🔔 Activer les notifications sur ce téléphone
+            </button>
+        </div>
+
         {% set match = status_info.get('match_info') %}
         
-        <!-- SI LE TOURNOI EST TERMINÉ -->
         {% if status_info.get('status') == 'Terminé' %}
             <div class="final-ranks-container">
-                <!-- Classement Général -->
                 <div class="final-rank-box">
                     <div class="final-rank-title">🏆 Général</div>
                     {% set rank = status_info.get('final_rank', 0) %}
@@ -111,7 +115,6 @@
                     {% endif %}
                 </div>
 
-                <!-- Classement par Catégorie -->
                 {% set c_rank = status_info.get('category_rank', 0) %}
                 {% set c_total = status_info.get('category_total', 0) %}
                 {% set c_code = status_info.get('category_code', '') %}
@@ -130,7 +133,6 @@
                 {% endif %}
             </div>
 
-        <!-- PENDANT LE TOURNOI -->
         {% elif match and match.get('opponent') %}
             <div class="match-card">
                 <div class="table-number">Echiquier N° {{ match.get('table') }}</div>
@@ -190,5 +192,110 @@
             Mis à jour automatiquement toutes les 15s
         </div>
     </div>
+
+    <script>
+        const VAPID_PUBLIC_KEY = "{{ vapid_public_key }}".replace(/["'\s]/g, '');
+        const TOURNAMENT_ID = "{{ status_info.get('tournament_id') }}";
+        const PLAYER_NAME = "{{ player }}";
+
+        function urlBase64ToUint8Array(base64String) {
+            const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+            const base64 = (base64String + padding)
+                .replace(/\-/g, '+')
+                .replace(/_/g, '/');
+
+            const rawData = window.atob(base64);
+            const outputArray = new Uint8Array(rawData.length);
+
+            for (let i = 0; i < rawData.length; ++i) {
+                outputArray[i] = rawData.charCodeAt(i);
+            }
+            return outputArray;
+        }
+
+        async function initServiceWorker() {
+            console.log("=== [WebPush Debug] Diagnostic d'initialisation ===");
+            console.log("[WebPush] Protocole :", window.location.protocol);
+            console.log("[WebPush] VAPID_PUBLIC_KEY reçue :", VAPID_PUBLIC_KEY ? `${VAPID_PUBLIC_KEY.substring(0, 15)}... (longueur: ${VAPID_PUBLIC_KEY.length})` : "❌ VIDE / NON DÉFINIE");
+            console.log("[WebPush] Support ServiceWorker :", 'serviceWorker' in navigator);
+            console.log("[WebPush] Support PushManager :", 'PushManager' in window);
+            console.log("[WebPush] Permission Notifications actuelle :", Notification.permission);
+
+            if (!VAPID_PUBLIC_KEY) {
+                console.error("[WebPush ERROR] La clé VAPID_PUBLIC_KEY n'a pas été transmise par Flask. Vérifiez votre .env ou le redémarrage Docker.");
+                return;
+            }
+
+            if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+                console.warn("[WebPush WARNING] Les Push Notifications nécessitent HTTPS (sauf sur localhost). Le navigateur bloque l'API sur HTTP.");
+            }
+
+            if ('serviceWorker' in navigator && 'PushManager' in window) {
+                try {
+                    const reg = await navigator.serviceWorker.register('/sw.js');
+                    console.log("[WebPush] Service Worker enregistré avec succès (Scope: " + reg.scope + ")");
+
+                    const sub = await reg.pushManager.getSubscription();
+                    console.log("[WebPush] Souscription existante sur cet appareil :", sub ? "OUI" : "NON");
+
+                    if (Notification.permission === 'denied') {
+                        console.warn("[WebPush WARNING] L'utilisateur a précédemment bloqué/refusé les notifications sur ce domaine.");
+                    }
+
+                    if (!sub && Notification.permission !== 'denied') {
+                        console.log("[WebPush] Condition remplie -> Affichage du bouton d'activation");
+                        document.getElementById('push-notification-banner').style.display = 'block';
+                    } else if (sub) {
+                        console.log("[WebPush] L'appareil est déjà abonné aux notifications.");
+                    }
+                } catch (err) {
+                    console.error("[WebPush ERROR] Échec de l'enregistrement du Service Worker :", err);
+                }
+            } else {
+                console.error("[WebPush ERROR] Ce navigateur ou contexte (HTTP) ne supporte pas les Service Workers ou la Push API.");
+            }
+        }
+
+        async function subscribeToWebPush() {
+            console.log("[WebPush] Demande de souscription lancée par l'utilisateur...");
+            try {
+                const reg = await navigator.serviceWorker.ready;
+                console.log("[WebPush] Conversion de la clé VAPID...");
+                const convertedKey = urlBase64ToUint8Array(VAPID_PUBLIC_KEY);
+
+                console.log("[WebPush] Demande d'autorisation système du navigateur...");
+                const subscription = await reg.pushManager.subscribe({
+                    userVisibleOnly: true,
+                    applicationServerKey: convertedKey
+                });
+
+                console.log("[WebPush] Souscription locale créée, envoi au serveur Flask...");
+
+                const resp = await fetch('/api/subscribe_webpush', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        tournament_id: TOURNAMENT_ID,
+                        player: PLAYER_NAME,
+                        subscription: subscription
+                    })
+                });
+
+                if (resp.ok) {
+                    console.log("[WebPush] Souscription validée et enregistrée côté serveur !");
+                    document.getElementById('push-notification-banner').innerHTML = 
+                        '<div style="color: #28a745; font-size: 13px; font-weight: bold;">✅ Notifications activées sur cet appareil !</div>';
+                } else {
+                    const errData = await resp.json();
+                    console.error("[WebPush ERROR] Le serveur a rejeté la souscription :", errData);
+                }
+            } catch (err) {
+                console.error("[WebPush ERROR] Échec lors de la souscription :", err);
+                alert("Impossible d'activer les notifications : " + err.message);
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', initServiceWorker);
+    </script>
 </body>
 </html>

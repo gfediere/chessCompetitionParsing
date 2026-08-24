@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FFE Chess Bot Controller</title>
+    <title>Chess Bot Controller</title>
     <style>
         body { font-family: system-ui, sans-serif; background: #f4f6f8; margin: 0; padding: 20px; display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; }
         .card { background: white; padding: 25px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); width: 100%; max-width: 480px; }
@@ -27,7 +27,6 @@
         .archive-item { padding: 10px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
         .notification-options { background: #f8f9fa; border: 1px solid #e9ecef; padding: 12px; border-radius: 6px; margin-top: 8px; display: none; }
 
-        /* Style de la barre de chargement */
         .progress-container {
             display: none;
             width: 100%;
@@ -69,11 +68,11 @@
           {% endif %}
         {% endwith %}
 
-        <!-- RECHERCHE DE TOURNOI EN CACHE LOCAL -->
+        <!-- RECHERCHE DE TOURNOI -->
         <div class="form-group" style="background: #f8f9fa; padding: 12px; border-radius: 6px; border: 1px solid #e9ecef; margin-bottom: 15px; position: relative;">
             <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
-                    <label style="color: #0056b3; margin: 0;">🔍 Rechercher un tournoi FFE</label>
+                    <label style="color: #0056b3; margin: 0;">🔍 Rechercher un tournoi</label>
                     <small style="color: #6c757d; font-size: 11px; display: block; margin-top: 2px;">
                         Dernière synchro : <strong>{{ last_sync }}</strong>
                     </small>
@@ -89,7 +88,6 @@
             </div>
             
             <div style="display: flex; gap: 8px; margin-top: 8px;">
-                <!-- Menu Déroulant Départements -->
                 <select id="search_dept" onchange="triggerTournamentSearch()" style="width: 50%;">
                     <option value="">Tous départements</option>
                     <option value="01">01 - Ain</option>
@@ -195,7 +193,6 @@
                     <option value="976">976 - Mayotte</option>
                 </select>
 
-                <!-- Menu Déroulant Mois -->
                 <select id="search_date" onchange="triggerTournamentSearch()" style="width: 50%;">
                     <option value="">Tous les mois</option>
                     <option value="janvier">Janvier</option>
@@ -217,7 +214,6 @@
                 <input type="text" id="search_query" placeholder="Mot-clé facultatif (ex: Rapide, Open, Ville...)" oninput="triggerTournamentSearch()">
             </div>
 
-            <!-- Suggestions déroulantes -->
             <div id="tournament_suggestions" style="display:none; position: absolute; top: 100%; left: 0; right: 0; background: white; border: 1px solid #ccc; border-radius: 4px; max-height: 220px; overflow-y: auto; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,0.15);"></div>
         </div>
 
@@ -233,13 +229,16 @@
 
             <div class="form-group" style="position: relative;">
                 <label>Nom du Joueur (user)</label>
-                <input type="text" id="user_input" name="user" value="{{ defaults.user }}" required autocomplete="off" placeholder="Veuillez d'abord sélectionner un tournoi..." disabled oninput="filterPlayers()">
+                {% if is_admin %}
+                    <input type="text" id="user_input" name="user" value="{{ defaults.user }}" required autocomplete="off" placeholder="Saisissez NOM Prénom..." oninput="filterPlayers()">
+                {% else %}
+                    <input type="text" id="user_input" name="user" value="{{ defaults.user }}" required autocomplete="off" placeholder="Veuillez d'abord sélectionner un tournoi..." disabled oninput="filterPlayers()">
+                {% endif %}
                 
-                <!-- Barre et texte de chargement -->
                 <div id="players_progress_bar" class="progress-container">
                     <div class="progress-bar"></div>
                 </div>
-                <div id="players_loading_text" class="status-loading-text">⏳ Récupération de la liste des joueurs FFE en cours...</div>
+                <div id="players_loading_text" class="status-loading-text">⏳ Récupération de la liste des joueurs en cours...</div>
 
                 <div id="player_suggestions" style="display:none; position: absolute; top: 100%; left: 0; right: 0; background: white; border: 1px solid #ccc; border-radius: 4px; max-height: 180px; overflow-y: auto; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,0.15);"></div>
             </div>
@@ -302,8 +301,8 @@
                     {% set t_id = data.get('tournament_id') %}
                     {% if t_id in active_bots %}
                         {% set match = data.get('match_info') %}
-                        {% set player_name = data.get('user') %}
-                        {% set clean_url_name = player_name.replace(' ', '') %}
+                        {% set player_name = data.get('user') or bot_key.split('___')[1] %}
+                        {% set clean_url_name = player_name.replace(' ', '').replace('_', '') %}
                         {% set k = data.get('k_factor', 20)|int %}
                         
                         <div class="bot-item">
@@ -351,8 +350,8 @@
             {% for bot_key, data in statuses.items() %}
                 {% set t_id = data.get('tournament_id') %}
                 {% if t_id not in active_bots %}
-                    {% set player_name = data.get('user') %}
-                    {% set clean_url_name = player_name.replace(' ', '') %}
+                    {% set player_name = data.get('user') or bot_key.split('___')[1] %}
+                    {% set clean_url_name = player_name.replace(' ', '').replace('_', '') %}
                     <div class="archive-item">
                         <div>
                             <strong>{{ player_name }}</strong><br>
@@ -438,12 +437,10 @@
             document.getElementById('search_query').value = title;
             document.getElementById('tournament_suggestions').style.display = 'none';
 
-            // Eléments visuels de chargement
             const userInput = document.getElementById('user_input');
             const progressBar = document.getElementById('players_progress_bar');
             const loadingText = document.getElementById('players_loading_text');
 
-            // 1. Extraction des rondes
             const roundsInput = document.querySelector('input[name="rounds"]');
             if (roundsInput) {
                 roundsInput.value = "";
@@ -460,14 +457,12 @@
                 }
             }
 
-            // 2. Extraction/Chargement des joueurs avec affichage de la barre de chargement
             if (userInput) {
                 userInput.value = "";
                 userInput.disabled = true;
                 userInput.placeholder = "Chargement des joueurs inscrits...";
                 currentTournamentPlayers = [];
                 
-                // Afficher la barre de progression et le texte
                 progressBar.style.display = 'block';
                 loadingText.style.display = 'block';
 
@@ -480,7 +475,6 @@
                 } catch (err) {
                     console.error("Erreur de récupération des joueurs:", err);
                 } finally {
-                    // Masquer la barre de progression
                     progressBar.style.display = 'none';
                     loadingText.style.display = 'none';
                     userInput.disabled = false;
@@ -579,6 +573,7 @@
                         </form>` : '';
 
                     const idDisplay = isAdmin ? `<small style="color: #666;">ID Tournoi: ${bot.tournament_id}</small><br>` : '';
+                    const playerSlug = bot.clean_url_name || 'joueur';
 
                     html += `
                         <div class="bot-item">
@@ -593,7 +588,7 @@
 
                                 ${matchHtml}
 
-                                <a href="/tournament/${bot.tournament_id}/${bot.clean_url_name}" target="_blank" class="mobile-btn">📱 Lien Mobile</a>
+                                <a href="/tournament/${bot.tournament_id}/${playerSlug}" target="_blank" class="mobile-btn">📱 Lien Mobile</a>
                             </div>
                             ${stopForm}
                         </div>`;

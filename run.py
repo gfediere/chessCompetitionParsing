@@ -9,6 +9,7 @@ import unicodedata
 import urllib.parse
 from bs4 import BeautifulSoup
 import requests
+from pywebpush import webpush, WebPushException
 
 # ---------------------------------------------------------------------------
 # LOGGING SETUP
@@ -45,6 +46,9 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 os.makedirs(SUBSCRIPTIONS_DIR, exist_ok=True)
 
 SUBSCRIPTION_FILE = os.path.join(SUBSCRIPTIONS_DIR, f"sub_{tournament_id}.json")
+
+VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "")
+VAPID_CLAIM_EMAIL = os.environ.get("VAPID_CLAIM_EMAIL", "mailto:admin@fedallica.fr")
 
 CATEGORY_NAMES = {
     "pPoM": "Petit Poussin", "pPoF": "Petite Poussine",
@@ -155,6 +159,36 @@ def load_subscriptions() -> dict:
             logger.error(f"[Subscriptions] Error reading {SUBSCRIPTION_FILE}: {e}")
     return {"players": {}}
 
+def send_webpush_notification(player_cfg: dict, title: str, body: str, url: str = None):
+    if not player_cfg.get("enable_webpush", False):
+        return
+
+    subscription_info = player_cfg.get("webpush_subscription")
+    if not subscription_info or not VAPID_PRIVATE_KEY:
+        return
+
+    if player_cfg.get("dry_run", False):
+        logger.info(f"[DRY RUN] WebPush non envoyé à {player_cfg.get('name')}:\nTitle: {title}\nBody: {body}")
+        return
+
+    payload = json.dumps({
+        "title": title,
+        "body": body,
+        "url": url or ""
+    })
+
+    try:
+        webpush(
+            subscription_info=subscription_info,
+            data=payload,
+            vapid_private_key=VAPID_PRIVATE_KEY,
+            vapid_claims={"sub": VAPID_CLAIM_EMAIL},
+            timeout=10
+        )
+        logger.info(f"[WebPush] Notification envoyée avec succès à {player_cfg.get('name')}")
+    except WebPushException as ex:
+        logger.error(f"[WebPush] Erreur d'envoi pour {player_cfg.get('name')}: {ex}")
+
 def push_over(player_cfg: dict, message: str, url: str = None, url_title: str = None):
     player_name = player_cfg.get("name", "Unknown")
 
@@ -192,11 +226,15 @@ def push_over(player_cfg: dict, message: str, url: str = None, url_title: str = 
     except Exception as e:
         logger.error(f"[Pushover] Failed to send notification for {player_name}: {e}")
 
+def notify_player(player_cfg: dict, title: str, message: str, url: str = None):
+    push_over(player_cfg, message, url=url)
+    send_webpush_notification(player_cfg, title, message, url=url)
+
 def check_url(url: str, retries: int = 3) -> BeautifulSoup | None:
     attempt = 0
     while attempt < retries:
         try:
-            logger.debug(f"[HTTP GET] FFE request (attempt {attempt + 1}/{retries}): {url}")
+            logger.debug(f"[HTTP GET] Request (attempt {attempt + 1}/{retries}): {url}")
             response = requests.get(url, timeout=10)
             response.encoding = 'iso-8859-1'
             response.raise_for_status()
@@ -409,7 +447,7 @@ def catchup_player_history(p_name: str, p_cfg: dict, current_round: int, t_name:
         )
         clean_slug = p_name.replace(" ", "").replace("_", "")
         mobile_url = f"{p_cfg.get('SERVER_URL')}/tournament/{tournament_id}/{clean_slug}"
-        push_over(p_cfg, msg_catchup, url=mobile_url)
+        notify_player(p_cfg, f"Suivi activé - {p_name}", msg_catchup, url=mobile_url)
 
     return history, found_player_elo
 
@@ -528,13 +566,14 @@ if __name__ == "__main__":
                 }
                 state["match_data"] = match_data
 
+                clean_slug = p_name.replace(" ", "").replace("_", "")
+                mobile_url = f"{p_cfg.get('SERVER_URL')}/tournament/{tournament_id}/{clean_slug}"
+
                 if not state["pairing_sent"]:
                     state["pairing_sent"] = True
                     logger.info(f"[Pairings] Pairing found for {p_name} (Board {table_num}, {color} vs {opponent})")
                     msg = f"Ronde {round_num} - Echiquier {table_num}\nJoueur: {p_name}\nCouleur: {color}\nAdversaire: {opponent} ({opponent_elo})"
-                    clean_slug = p_name.replace(" ", "").replace("_", "")
-                    mobile_url = f"{p_cfg.get('SERVER_URL')}/tournament/{tournament_id}/{clean_slug}"
-                    push_over(p_cfg, msg, url=mobile_url)
+                    notify_player(p_cfg, f"Appariement R.{round_num} - {p_name}", msg, url=mobile_url)
 
                 if result == "En cours":
                     all_results_found = False
@@ -554,7 +593,7 @@ if __name__ == "__main__":
                             f"Nouveau total: {format_points(pts)} pt(s)\n"
                             f"Variation Elo: {delta:+g} Elo (Perf: {perf})"
                         )
-                        push_over(p_cfg, res_msg)
+                        notify_player(p_cfg, f"Résultat R.{round_num} - {p_name}", res_msg, url=mobile_url)
 
                     final_rank, total_players, cat_rank, cat_total, cat_code, cat_full_name = 0, 0, 0, 0, "", ""
                     current_status = "Partie terminée"

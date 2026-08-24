@@ -10,6 +10,8 @@ RUN mkdir -p /app/data
 RUN mkdir -p /app/subscriptions
 
 COPY templates /app/templates
+COPY static /app/static
+
 COPY run.py /app/run.py
 COPY app.py /app/app.py
 
