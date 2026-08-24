@@ -34,15 +34,17 @@ active_bots = {}
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
+PLAYERS_DIR = os.path.join(DATA_DIR, "players")
+CACHE_DIR = os.path.join(DATA_DIR, "cache")
 SUBSCRIPTIONS_DIR = os.path.join(BASE_DIR, "subscriptions")
-TOURNAMENTS_CACHE_FILE = os.path.join(DATA_DIR, "tournaments_cache.json")
+TOURNAMENTS_CACHE_FILE = os.path.join(CACHE_DIR, "tournaments_cache.json")
 
-os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(PLAYERS_DIR, exist_ok=True)
+os.makedirs(CACHE_DIR, exist_ok=True)
 os.makedirs(SUBSCRIPTIONS_DIR, exist_ok=True)
 
 
 def fix_encoding(text: str) -> str:
-    """Répare les entités HTML et les doubles encodages UTF-8 (ex: VallÃ©e -> Vallée)."""
     if not text:
         return ""
     text = html.unescape(text)
@@ -143,7 +145,7 @@ def save_tournament_subscription(t_id, data):
 def get_statuses():
     statuses = {}
     
-    pattern = os.path.join(DATA_DIR, "status_*.json")
+    pattern = os.path.join(PLAYERS_DIR, "*", "status_*.json")
     for filepath in glob.glob(pattern):
         try:
             with open(filepath, "r", encoding="utf-8") as f:
@@ -195,9 +197,6 @@ def get_statuses():
     return statuses
 
 
-# ---------------------------------------------------------------------------
-# JSON CACHE SYSTEM FOR TOURNAMENTS & PLAYERS
-# ---------------------------------------------------------------------------
 def load_cached_tournaments() -> list:
     if os.path.exists(TOURNAMENTS_CACHE_FILE):
         try:
@@ -209,8 +208,7 @@ def load_cached_tournaments() -> list:
 
 
 def scrape_and_cache_players_for_tournament(t_id: str) -> list:
-    """Scrape la liste des joueurs d'un tournoi et la sauvegarde dans data/players_<t_id>.json."""
-    players_cache_file = os.path.join(DATA_DIR, f"players_{t_id}.json")
+    players_cache_file = os.path.join(CACHE_DIR, f"players_{t_id}.json")
     
     url = f"https://www.echecs.asso.fr/Resultats.aspx?URL=Tournois/Id/{t_id}/{t_id}&Action=GA"
     headers = {
@@ -238,13 +236,10 @@ def scrape_and_cache_players_for_tournament(t_id: str) -> list:
                 for row in rows:
                     row_text = fix_encoding(row.text)
 
-                    # Expression régulière stricte pour capturer : NOM (MAJUSCULES) suivi de Prénom (Capitalisé)
-                    # Exemples capturés : "FEDIERE Lucie", "DE LA MOTTE Antoine", "VAPORISYAN Levon-Alexandre"
                     match = re.search(r'([A-Z\s\-\']{2,25}\s+[A-ZÀ-ÖØ-ß][a-zà-öø-ÿ\-\']+)', row_text)
                     if match:
                         clean_name = " ".join(match.group(1).split())
                         
-                        # Sécurité : ignorer les faux positifs (ex: mots-clés d'en-tête ou de clubs en majuscules)
                         if len(clean_name) > 3 and not any(kw in clean_name for kw in ["Ronde", "Table", "Fide", "Club"]):
                             key = clean_name.lower()
                             if key not in seen_keys:
@@ -268,7 +263,6 @@ def scrape_and_cache_players_for_tournament(t_id: str) -> list:
 
 
 def fetch_and_cache_tournaments():
-    """Récupère l'intégralité des tournois FFE par département et les sauvegarde dans data/tournaments_cache.json."""
     logger.info("[Cache] Synchronisation globale du calendrier FFE (par département)...")
     
     headers = {
@@ -350,7 +344,6 @@ def fetch_and_cache_tournaments():
 
 
 def schedule_tournament_sync():
-    """Syncs immediately if cache is missing, then every 6 hours."""
     def worker():
         if not os.path.exists(TOURNAMENTS_CACHE_FILE):
             fetch_and_cache_tournaments()
@@ -430,8 +423,7 @@ def get_tournament_details(t_id):
 
 @app.route("/api/get_tournament_players/<t_id>")
 def get_tournament_players(t_id):
-    """Lecture du cache local des joueurs du tournoi ou scraping si absent."""
-    players_cache_file = os.path.join(DATA_DIR, f"players_{t_id}.json")
+    players_cache_file = os.path.join(CACHE_DIR, f"players_{t_id}.json")
 
     if os.path.exists(players_cache_file):
         try:
@@ -498,7 +490,6 @@ def search_tournaments():
 
 @app.route("/api/sync_now", methods=["POST"])
 def sync_now():
-    """Forces immediate JSON cache refresh."""
     threading.Thread(target=fetch_and_cache_tournaments, daemon=True).start()
     flash("Actualisation globale du calendrier FFE lancée en arrière-plan !")
     return redirect(url_for("index"))
@@ -520,7 +511,7 @@ def api_active_bots():
                 "tournament_name": data.get("tournament_name", "Chargement du nom..."),
                 "user": player_name,
                 "k_factor": data.get("k_factor", 20),
-                "clean_url_name": player_name.replace(" ", ""),
+                "clean_url_name": player_name.replace(" ", "").replace("_", ""),
                 "current_round": data.get("current_round", "?"),
                 "total_rounds": data.get("total_rounds", "?"),
                 "status": data.get("status", "En attente des appariements"),
@@ -536,28 +527,31 @@ def player_view_slug(tournament_id, player_slug):
     found_player_name = None
     target_filepath = None
 
-    data_files = glob.glob(os.path.join(DATA_DIR, "status_*.json"))
+    target_slug = player_slug.replace(" ", "").replace("_", "").lower()
+
+    data_files = glob.glob(os.path.join(PLAYERS_DIR, "*", "status_*.json"))
     for filepath in data_files:
         try:
             with open(filepath, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 t_id = str(data.get("tournament_id", "")).strip()
                 p_name = str(data.get("user", "")).strip()
-                clean_p_name = p_name.replace(" ", "")
+                clean_slug = p_name.replace(" ", "").replace("_", "").lower()
 
-                if t_id == str(tournament_id).strip() and clean_p_name == player_slug:
+                if t_id == str(tournament_id).strip() and clean_slug == target_slug:
                     status_info = data
                     found_player_name = p_name
                     target_filepath = filepath
                     break
-        except Exception:
+        except Exception as e:
+            logger.error(f"Error reading status file {filepath}: {e}")
             continue
 
     if not status_info:
         sub = get_tournament_subscription(tournament_id)
         for p_name in sub.get("players", {}):
-            clean_p_name = p_name.replace(" ", "")
-            if clean_p_name == player_slug:
+            clean_slug = p_name.replace(" ", "").replace("_", "").lower()
+            if clean_slug == target_slug:
                 found_player_name = p_name
                 status_info = {
                     "tournament_id": tournament_id,

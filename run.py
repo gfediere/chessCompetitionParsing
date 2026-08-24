@@ -36,9 +36,12 @@ round_start = 1
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
+PLAYERS_DIR = os.path.join(DATA_DIR, "players")
+CACHE_DIR = os.path.join(DATA_DIR, "cache")
 SUBSCRIPTIONS_DIR = os.path.join(BASE_DIR, "subscriptions")
 
-os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(PLAYERS_DIR, exist_ok=True)
+os.makedirs(CACHE_DIR, exist_ok=True)
 os.makedirs(SUBSCRIPTIONS_DIR, exist_ok=True)
 
 SUBSCRIPTION_FILE = os.path.join(SUBSCRIPTIONS_DIR, f"sub_{tournament_id}.json")
@@ -207,10 +210,6 @@ def check_url(url: str, retries: int = 3) -> BeautifulSoup | None:
     return None
 
 def fetch_final_rank(t_id: str, player_name: str) -> tuple[int, int, int, int, str, str]:
-    """
-    Scrapes Action=Cl FFE page to fetch overall rank, total players,
-    category rank, category total, category code, and category full name.
-    """
     url_clas = f"https://www.echecs.asso.fr/Resultats.aspx?URL=Tournois/Id/{t_id}/{t_id}&Action=Cl"
     soup = check_url(url_clas)
     if not soup:
@@ -291,7 +290,9 @@ def fetch_final_rank(t_id: str, player_name: str) -> tuple[int, int, int, int, s
 
 def update_player_status(t_id, player_name, current_round, status, t_name, match_info, round_history, k_factor=20.0, player_elo=0, final_rank=0, total_players=0, cat_rank=0, cat_total=0, cat_code="", cat_full_name=""):
     clean_player = player_name.replace(" ", "_")
-    status_file = os.path.join(DATA_DIR, f"status_{t_id}_{clean_player}.json")
+    player_dir = os.path.join(PLAYERS_DIR, clean_player)
+    os.makedirs(player_dir, exist_ok=True)
+    status_file = os.path.join(player_dir, f"status_{t_id}.json")
     
     current_points = calculate_total_points(round_history)
     delta_elo, performance = calculate_elo_and_perf(player_elo, round_history, k_factor)
@@ -406,7 +407,7 @@ def catchup_player_history(p_name: str, p_cfg: dict, current_round: int, t_name:
             f"Current score: {format_points(pts)} pt(s)\n"
             f"Elo variation: {delta:+g} Elo"
         )
-        clean_slug = p_name.replace(" ", "")
+        clean_slug = p_name.replace(" ", "").replace("_", "")
         mobile_url = f"{p_cfg.get('SERVER_URL')}/tournament/{tournament_id}/{clean_slug}"
         push_over(p_cfg, msg_catchup, url=mobile_url)
 
@@ -531,7 +532,7 @@ if __name__ == "__main__":
                     state["pairing_sent"] = True
                     logger.info(f"[Pairings] Pairing found for {p_name} (Board {table_num}, {color} vs {opponent})")
                     msg = f"Ronde {round_num} - Echiquier {table_num}\nJoueur: {p_name}\nCouleur: {color}\nAdversaire: {opponent} ({opponent_elo})"
-                    clean_slug = p_name.replace(" ", "")
+                    clean_slug = p_name.replace(" ", "").replace("_", "")
                     mobile_url = f"{p_cfg.get('SERVER_URL')}/tournament/{tournament_id}/{clean_slug}"
                     push_over(p_cfg, msg, url=mobile_url)
 
