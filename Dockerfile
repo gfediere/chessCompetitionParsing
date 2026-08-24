@@ -1,18 +1,20 @@
-FROM python:alpine3.20
-
-WORKDIR /usr/src/app
+FROM python:3.11-slim
+RUN useradd -m -u 1000 appuser
+WORKDIR /app
 
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r ./requirements.txt
 
 # Création des deux dossiers dédiés
-RUN mkdir -p /usr/src/app/data
-RUN mkdir -p /usr/src/app/subscriptions
+RUN mkdir -p /app/data
+RUN mkdir -p /app/subscriptions
 
-COPY templates /usr/src/app/templates
-COPY run.py /usr/src/app/run.py
-COPY app.py /usr/src/app/app.py
+COPY templates /app/templates
+COPY run.py /app/run.py
+COPY app.py /app/app.py
 
+RUN chown -R appuser:appuser /app
+USER appuser
 EXPOSE 5000
 
-CMD [ "python", "/usr/src/app/app.py" ]
+CMD [ "python", "/app/app.py" ]
