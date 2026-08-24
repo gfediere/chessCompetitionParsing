@@ -8,10 +8,10 @@
         body { font-family: system-ui, sans-serif; background: #f4f6f8; margin: 0; padding: 20px; display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; }
         .card { background: white; padding: 25px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); width: 100%; max-width: 480px; }
         h2 { margin-top: 0; color: #333; }
-        .form-group { margin-bottom: 12px; }
+        .form-group { margin-bottom: 12px; position: relative; }
         label { display: block; margin-bottom: 4px; font-weight: bold; color: #555; font-size: 14px; }
         input[type="text"], input[type="number"], select { width: 100%; padding: 8px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
-        input[readonly] { background-color: #e9ecef; color: #495057; cursor: not-allowed; }
+        input[readonly], input[disabled] { background-color: #e9ecef; color: #6c757d; cursor: not-allowed; }
         .checkbox-group { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
         button { background: #28a745; color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer; width: 100%; font-size: 16px; margin-top: 10px; }
         button:hover { background: #218838; }
@@ -26,6 +26,36 @@
         .badge { display: inline-block; padding: 4px 10px; background: #007bff; color: white; border-radius: 12px; font-size: 12px; font-weight: bold; margin-top: 6px; }
         .archive-item { padding: 10px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
         .notification-options { background: #f8f9fa; border: 1px solid #e9ecef; padding: 12px; border-radius: 6px; margin-top: 8px; display: none; }
+
+        /* Style de la barre de chargement */
+        .progress-container {
+            display: none;
+            width: 100%;
+            height: 6px;
+            background-color: #e9ecef;
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 6px;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 100%;
+            background-color: #007bff;
+            animation: indeterminate 1.5s infinite linear;
+            transform-origin: 0% 50%;
+        }
+        @keyframes indeterminate {
+            0% { transform: translateX(0) scaleX(0); }
+            40% { transform: translateX(0) scaleX(0.4); }
+            100% { transform: translateX(100%) scaleX(0.5); }
+        }
+        .status-loading-text {
+            font-size: 12px;
+            color: #0056b3;
+            margin-top: 4px;
+            display: none;
+            font-weight: 500;
+        }
     </style>
 </head>
 <body>
@@ -192,7 +222,6 @@
         </div>
 
         <form method="POST" action="/start">
-            <!-- CHAMP ID TOURNOI : MASQUÉ SI NON ADMIN -->
             {% if is_admin %}
             <div class="form-group">
                 <label>ID Tournoi (tournament_id)</label>
@@ -204,7 +233,14 @@
 
             <div class="form-group" style="position: relative;">
                 <label>Nom du Joueur (user)</label>
-                <input type="text" id="user_input" name="user" value="{{ defaults.user }}" required autocomplete="off" placeholder="Sélectionnez un tournoi pour charger les joueurs..." oninput="filterPlayers()">
+                <input type="text" id="user_input" name="user" value="{{ defaults.user }}" required autocomplete="off" placeholder="Veuillez d'abord sélectionner un tournoi..." disabled oninput="filterPlayers()">
+                
+                <!-- Barre et texte de chargement -->
+                <div id="players_progress_bar" class="progress-container">
+                    <div class="progress-bar"></div>
+                </div>
+                <div id="players_loading_text" class="status-loading-text">⏳ Récupération de la liste des joueurs FFE en cours...</div>
+
                 <div id="player_suggestions" style="display:none; position: absolute; top: 100%; left: 0; right: 0; background: white; border: 1px solid #ccc; border-radius: 4px; max-height: 180px; overflow-y: auto; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,0.15);"></div>
             </div>
 
@@ -221,7 +257,6 @@
                 </select>
             </div>
 
-            <!-- MENU DÉROULANT DES NOTIFICATIONS -->
             <div class="form-group">
                 <label>Activer les notifications</label>
                 <select name="notification_provider" id="notification_provider" onchange="toggleNotificationProvider(this.value)">
@@ -230,7 +265,6 @@
                 </select>
             </div>
 
-            <!-- OPTIONS PUSHOVER -->
             <div id="pushover_options" class="notification-options">
                 <div class="form-group">
                     <label>Pushover App Token</label>
@@ -404,6 +438,11 @@
             document.getElementById('search_query').value = title;
             document.getElementById('tournament_suggestions').style.display = 'none';
 
+            // Eléments visuels de chargement
+            const userInput = document.getElementById('user_input');
+            const progressBar = document.getElementById('players_progress_bar');
+            const loadingText = document.getElementById('players_loading_text');
+
             // 1. Extraction des rondes
             const roundsInput = document.querySelector('input[name="rounds"]');
             if (roundsInput) {
@@ -421,26 +460,37 @@
                 }
             }
 
-            // 2. Extraction/Chargement des joueurs
-            const userInput = document.getElementById('user_input');
+            // 2. Extraction/Chargement des joueurs avec affichage de la barre de chargement
             if (userInput) {
                 userInput.value = "";
+                userInput.disabled = true;
                 userInput.placeholder = "Chargement des joueurs inscrits...";
                 currentTournamentPlayers = [];
                 
+                // Afficher la barre de progression et le texte
+                progressBar.style.display = 'block';
+                loadingText.style.display = 'block';
+
                 try {
                     const resp = await fetch(`/api/get_tournament_players/${id}`);
                     if (resp.ok) {
                         const data = await resp.json();
                         currentTournamentPlayers = data.players || [];
-                        if (currentTournamentPlayers.length > 0) {
-                            userInput.placeholder = `Tapez pour chercher parmi ${currentTournamentPlayers.length} joueur(s)...`;
-                        } else {
-                            userInput.placeholder = "Saisissez votre NOM Prénom...";
-                        }
                     }
                 } catch (err) {
-                    userInput.placeholder = "Saisissez votre NOM Prénom...";
+                    console.error("Erreur de récupération des joueurs:", err);
+                } finally {
+                    // Masquer la barre de progression
+                    progressBar.style.display = 'none';
+                    loadingText.style.display = 'none';
+                    userInput.disabled = false;
+
+                    if (currentTournamentPlayers.length > 0) {
+                        userInput.placeholder = `Tapez pour chercher parmi ${currentTournamentPlayers.length} joueur(s)...`;
+                        userInput.focus();
+                    } else {
+                        userInput.placeholder = "Saisissez votre NOM Prénom...";
+                    }
                 }
             }
         }
