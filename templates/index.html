@@ -192,11 +192,16 @@
         </div>
 
         <form method="POST" action="/start">
+            <!-- CHAMP ID TOURNOI : MASQUÉ SI NON ADMIN -->
+            {% if is_admin %}
             <div class="form-group">
                 <label>ID Tournoi (tournament_id)</label>
                 <input type="text" id="tournament_id" name="tournament_id" value="{{ defaults.tournament_id }}" required placeholder="ex: 63375">
             </div>
-            
+            {% else %}
+            <input type="hidden" id="tournament_id" name="tournament_id" value="{{ defaults.tournament_id }}">
+            {% endif %}
+
             <div class="form-group" style="position: relative;">
                 <label>Nom du Joueur (user)</label>
                 <input type="text" id="user_input" name="user" value="{{ defaults.user }}" required autocomplete="off" placeholder="Sélectionnez un tournoi pour charger les joueurs..." oninput="filterPlayers()">
@@ -271,7 +276,9 @@
                             <div>
                                 <strong>👤 {{ player_name }}</strong> <small style="color: #666;">(K={{ k }})</small><br>
                                 <span class="tournament-title">🏆 {{ data.get('tournament_name', 'Chargement du nom...') }}</span><br>
+                                {% if is_admin %}
                                 <small style="color: #666;">ID Tournoi: {{ t_id }}</small><br>
+                                {% endif %}
                                 
                                 <span class="badge">
                                     Ronde {{ data.get('current_round', '?') }} / {{ data.get('total_rounds', '?') }}
@@ -315,7 +322,7 @@
                     <div class="archive-item">
                         <div>
                             <strong>{{ player_name }}</strong><br>
-                            <small style="color: #666;">{{ data.get('tournament_name') }} (ID: {{ t_id }})</small>
+                            <small style="color: #666;">{{ data.get('tournament_name') }} {% if is_admin %}(ID: {{ t_id }}){% endif %}</small>
                         </div>
                         <a href="/tournament/{{ t_id }}/{{ clean_url_name }}" target="_blank" class="mobile-btn">📱 Voir Fiche</a>
                     </div>
@@ -379,7 +386,7 @@
                                  onclick="selectTournament('${t.id}', '${t.title.replace(/'/g, "\\'")}')"
                                  onmouseover="this.style.background='#f0f7ff'" 
                                  onmouseout="this.style.background='white'">
-                                <strong>${t.title}</strong> <small style="color:#0056b3;">(ID: ${t.id})</small><br>
+                                <strong>${t.title}</strong> ${isAdmin ? `<small style="color:#0056b3;">(ID: ${t.id})</small>` : ''}<br>
                                 <span style="color:#666; font-size: 11px;">📍 ${t.location} — 📅 ${t.dates}</span>
                             </div>`;
                     });
@@ -521,12 +528,14 @@
                             <button type="submit" class="stop-btn">Arrêter</button>
                         </form>` : '';
 
+                    const idDisplay = isAdmin ? `<small style="color: #666;">ID Tournoi: ${bot.tournament_id}</small><br>` : '';
+
                     html += `
                         <div class="bot-item">
                             <div>
                                 <strong>👤 ${bot.user}</strong> <small style="color: #666;">(K=${kFactor})</small><br>
                                 <span class="tournament-title">🏆 ${bot.tournament_name}</span><br>
-                                <small style="color: #666;">ID Tournoi: ${bot.tournament_id}</small><br>
+                                ${idDisplay}
                                 
                                 <span class="badge">
                                     Ronde ${bot.current_round} / ${bot.total_rounds}
