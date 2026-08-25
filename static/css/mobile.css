@@ -1,0 +1,44 @@
+body { font-family: system-ui, -apple-system, sans-serif; background: #eef2f5; margin: 0; padding: 15px; display: flex; justify-content: center; }
+.card { background: white; border-radius: 16px; padding: 20px; width: 100%; max-width: 400px; box-shadow: 0 8px 20px rgba(0,0,0,0.08); }
+.header { text-align: center; border-bottom: 2px solid #f0f0f0; padding-bottom: 15px; margin-bottom: 15px; }
+.player-name { font-size: 22px; font-weight: bold; color: #1a1a1a; margin: 0; }
+.player-elo { font-size: 13px; color: #718096; font-weight: 500; margin-top: 2px; }
+.tournament-name { font-size: 14px; color: #0056b3; font-weight: 600; margin-top: 5px; }
+.round-badge { display: inline-block; background: #007bff; color: white; padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: bold; }
+.points-badge { display: inline-block; background: #28a745; color: white; padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: bold; }
+
+.badges-row { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; margin-top: 10px; }
+.elo-badge { display: inline-block; padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: bold; color: white; }
+.elo-up { background: #28a745; }
+.elo-down { background: #dc3545; }
+.elo-neutral { background: #6c757d; }
+.perf-badge { display: inline-block; background: #6f42c1; color: white; padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: bold; }
+
+.match-card { background: #f8f9fa; border-radius: 12px; padding: 15px; border: 1px solid #e9ecef; margin-top: 15px; text-align: center; }
+.table-number { font-size: 26px; font-weight: 800; color: #2d3748; margin-bottom: 5px; }
+.piece-color { font-size: 18px; font-weight: 600; padding: 6px 14px; border-radius: 8px; display: inline-block; margin-bottom: 10px; }
+.white-piece { background: #ffffff; color: #1a1a1a; border: 1px solid #ccc; }
+.black-piece { background: #2d3748; color: #ffffff; }
+.vs-label { font-size: 11px; color: #a0aec0; text-transform: uppercase; letter-spacing: 1px; font-weight: bold; }
+.opponent-name { font-size: 18px; font-weight: bold; color: #2b6cb0; margin-top: 4px; }
+.opponent-elo { font-size: 13px; color: #718096; margin-top: 2px; font-weight: 500; }
+
+.final-ranks-container { display: flex; gap: 10px; margin-top: 15px; }
+.final-rank-box { flex: 1; background: #f4fff6; border: 1px solid #28a745; border-radius: 12px; padding: 12px; text-align: center; }
+.final-rank-title { font-size: 11px; color: #1e7e34; font-weight: bold; text-transform: uppercase; }
+.final-rank-value { font-size: 24px; font-weight: 800; color: #1e7e34; margin: 4px 0; }
+.final-rank-sub { font-size: 12px; color: #6c757d; font-weight: normal; }
+
+.history-section { margin-top: 25px; border-top: 2px solid #f0f0f0; padding-top: 15px; }
+.history-title { font-size: 15px; font-weight: bold; color: #4a5568; margin-bottom: 12px; text-align: left; }
+.history-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: #f8f9fa; border-radius: 8px; margin-bottom: 8px; font-size: 13px; border: 1px solid #edf2f7; }
+.history-round { font-weight: bold; color: #007bff; }
+.history-opponent { color: #2d3748; font-weight: 500; }
+.res-badge { padding: 2px 8px; border-radius: 4px; font-weight: bold; font-size: 12px; }
+.res-win { background: #d4edda; color: #155724; }
+.res-draw { background: #e2e3e5; color: #383d41; }
+.res-loss { background: #f8d7da; color: #721c24; }
+.res-pending { background: #fff3cd; color: #856404; }
+
+.status-waiting { font-size: 15px; color: #718096; padding: 20px 0; text-align: center; }
+.footer { text-align: center; font-size: 11px; color: #a0aec0; margin-top: 20px; }
