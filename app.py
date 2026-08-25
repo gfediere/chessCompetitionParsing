@@ -46,6 +46,10 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 os.makedirs(SUBSCRIPTIONS_DIR, exist_ok=True)
 
 
+def is_admin():
+    return request.args.get("admin") == "1" or (request.referrer and "admin=1" in request.referrer)
+
+
 def fix_encoding(text: str) -> str:
     if not text:
         return ""
@@ -123,6 +127,21 @@ def clean_dead_processes():
     to_remove = [t_id for t_id, p in active_bots.items() if p.poll() is not None]
     for t_id in to_remove:
         logger.info(f"[Process] Tournament worker {t_id} finished. Cleaning up.")
+        del active_bots[t_id]
+
+
+def stop_bot_for_player(t_id, user_name):
+    sub = get_tournament_subscription(t_id)
+    if user_name in sub.get("players", {}):
+        del sub["players"][user_name]
+        save_tournament_subscription(t_id, sub)
+        logger.info(f"[Subscriptions] Player '{user_name}' removed from tournament {t_id}")
+
+    if not sub.get("players") and t_id in active_bots:
+        proc = active_bots[t_id]
+        if proc.poll() is None:
+            proc.terminate()
+            logger.info(f"[Process] No remaining subscribers for tournament {t_id}. Worker (PID {proc.pid}) stopped.")
         del active_bots[t_id]
 
 
@@ -373,7 +392,7 @@ def index():
     clean_dead_processes()
     statuses = get_statuses()
     
-    is_admin = (request.args.get("admin") == "1")
+    admin_mode = is_admin()
 
     last_sync = "Jamais"
     if os.path.exists(TOURNAMENTS_CACHE_FILE):
@@ -397,7 +416,7 @@ def index():
         statuses=statuses, 
         defaults=defaults, 
         last_sync=last_sync,
-        is_admin=is_admin
+        is_admin=admin_mode
     )
 
 
@@ -516,8 +535,9 @@ def subscribe_webpush():
     if player_name in sub.get("players", {}):
         sub["players"][player_name]["webpush_subscription"] = push_subscription
         sub["players"][player_name]["enable_webpush"] = True
+        sub["players"][player_name]["subscribed_at"] = datetime.now().isoformat(timespec='seconds')
         save_tournament_subscription(t_id, sub)
-        logger.info(f"[WebPush] Souscription enregistrée pour {player_name} (Tournoi {t_id})")
+        logger.info(f"[WebPush] Souscription enregistrée pour {player_name} à {sub['players'][player_name]['subscribed_at']} (Tournoi {t_id})")
         return {"status": "success"}
 
     return {"status": "error", "message": "Joueur non trouvé"}, 404
@@ -532,7 +552,6 @@ def api_active_bots():
     for bot_key, data in statuses.items():
         t_id = data.get("tournament_id")
         if t_id in active_bots:
-            # Récupération sécurisée du nom du joueur
             player_name = data.get("user", "")
             if not player_name and "___" in bot_key:
                 player_name = bot_key.split("___", 1)[1]
@@ -670,7 +689,8 @@ def start():
         "pushover_app_token": request.form.get("pushover_app_token", "").strip() if enable_pushover else "",
         "pushover_user_key": request.form.get("pushover_user_key", "").strip() if enable_pushover else "",
         "SERVER_URL": server_url,
-        "dry_run": bool(request.form.get("dry_run"))
+        "dry_run": bool(request.form.get("dry_run")),
+        "subscribed_at": datetime.now().isoformat(timespec='seconds')
     }
     save_tournament_subscription(tournament_id, sub)
 
@@ -690,7 +710,8 @@ def start():
         logger.info(f"[Process] Player '{user}' added to active worker for tournament {tournament_id} (PID {active_bots[tournament_id].pid})")
         flash(f"Joueur {user} ajouté au worker du tournoi {tournament_id} déjà en cours !")
 
-    return redirect(url_for("index"))
+    redirect_target = url_for("index", admin=1) if is_admin() else url_for("index")
+    return redirect(redirect_target)
 
 
 @app.route("/stop", methods=["POST"])
@@ -698,24 +719,44 @@ def stop():
     bot_key = request.form.get("bot_key")
     if bot_key and "___" in bot_key:
         t_id, user = bot_key.split("___", 1)
+        stop_bot_for_player(t_id, user)
+        flash(f"Suivi de {user} arrêté pour le tournoi {t_id}.")
 
-        sub = get_tournament_subscription(t_id)
-        if user in sub.get("players", {}):
-            del sub["players"][user]
-            save_tournament_subscription(t_id, sub)
-            logger.info(f"[Subscriptions] Player '{user}' removed from tournament {t_id}")
+    redirect_target = url_for("index", admin=1) if is_admin() else url_for("index")
+    return redirect(redirect_target)
 
-        if not sub.get("players") and t_id in active_bots:
-            proc = active_bots[t_id]
-            if proc.poll() is None:
-                proc.terminate()
-                logger.info(f"[Process] No remaining subscribers for tournament {t_id}. Worker (PID {proc.pid}) stopped.")
-            del active_bots[t_id]
-            flash(f"Dernier joueur retiré. Worker du tournoi {t_id} arrêté.")
-        else:
-            flash(f"Suivi de {user} arrêté pour le tournoi {t_id}.")
 
-    return redirect(url_for("index"))
+@app.route("/delete", methods=["POST"])
+def delete():
+    if not is_admin():
+        flash("Accès non autorisé.", "error")
+        return redirect(url_for("index"))
+
+    bot_key = request.form.get("bot_key", "").strip()
+    if not bot_key or "___" not in bot_key:
+        flash("Clé introuvable ou invalide.", "error")
+        return redirect(url_for("index", admin=1))
+
+    t_id, user_name = bot_key.split("___", 1)
+
+    stop_bot_for_player(t_id, user_name)
+
+    clean_player = user_name.replace(" ", "_")
+    status_file = os.path.join(PLAYERS_DIR, clean_player, f"status_{t_id}.json")
+    
+    if os.path.exists(status_file):
+        try:
+            os.remove(status_file)
+            logger.info(f"[Delete] Fichier de statut supprimé : {status_file}")
+            
+            player_dir = os.path.dirname(status_file)
+            if os.path.exists(player_dir) and not os.listdir(player_dir):
+                os.rmdir(player_dir)
+        except Exception as e:
+            logger.error(f"[Delete] Erreur lors de la suppression de {status_file}: {e}")
+
+    flash(f"L'historique de {user_name} a été supprimé définitivement.", "success")
+    return redirect(url_for("index", admin=1))
 
 
 if __name__ == "__main__":

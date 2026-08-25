@@ -17,14 +17,15 @@
         button:hover { background: #218838; }
         .stop-btn { background: #dc3545; margin-top: 0; padding: 6px 12px; font-size: 13px; width: auto; }
         .stop-btn:hover { background: #c82333; }
-        .mobile-btn { display: inline-block; background: #17a2b8; color: white; text-decoration: none; padding: 4px 8px; border-radius: 4px; font-size: 12px; margin-top: 6px; }
+        .delete-btn { background: none; border: none; font-size: 16px; cursor: pointer; padding: 4px; line-height: 1; opacity: 0.8; transition: opacity 0.2s; } .delete-btn:hover { opacity: 1; transform: scale(1.1); }
+        .mobile-btn { display: inline-block; background: #17a2b8; color: white; text-decoration: none; padding: 5px 10px; border-radius: 4px; font-size: 12px; }
         .mobile-btn:hover { background: #138496; }
         .flash { background: #d4edda; color: #155724; padding: 10px; border-radius: 4px; margin-bottom: 15px; }
         .bot-item { display: flex; justify-content: space-between; align-items: flex-start; padding: 12px; border: 1px solid #ddd; border-radius: 6px; margin-bottom: 10px; background: #fafafa; }
         .tournament-title { color: #0056b3; font-weight: bold; font-size: 13px; }
         .match-details { margin-top: 6px; padding: 6px 8px; background: #eef4fc; border-left: 3px solid #007bff; border-radius: 4px; font-size: 13px; color: #333; }
         .badge { display: inline-block; padding: 4px 10px; background: #007bff; color: white; border-radius: 12px; font-size: 12px; font-weight: bold; margin-top: 6px; }
-        .archive-item { padding: 10px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
+        .archive-item { padding: 10px 0; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
         .notification-options { background: #f8f9fa; border: 1px solid #e9ecef; padding: 12px; border-radius: 6px; margin-top: 8px; display: none; }
 
         .progress-container {
@@ -328,7 +329,7 @@
                                     </div>
                                 {% endif %}
 
-                                <a href="/tournament/{{ t_id }}/{{ clean_url_name }}" target="_blank" class="mobile-btn">📱 Lien Mobile</a>
+                                <a href="/tournament/{{ t_id }}/{{ clean_url_name }}" target="_blank" class="mobile-btn" style="margin-top:6px;">📱 Lien Mobile</a>
                             </div>
 
                             {% if is_admin %}
@@ -355,9 +356,14 @@
                     <div class="archive-item">
                         <div>
                             <strong>{{ player_name }}</strong><br>
-                            <small style="color: #666;">{{ data.get('tournament_name') }} {% if is_admin %}(ID: {{ t_id }}){% endif %}</small>
+                            <small style="color: #666;">{{ data.get('tournament_name', 'Tournoi') }} {% if is_admin %}(ID: {{ t_id }}){% endif %}</small>
                         </div>
-                        <a href="/tournament/{{ t_id }}/{{ clean_url_name }}" target="_blank" class="mobile-btn">📱 Voir Fiche</a>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <a href="/tournament/{{ t_id }}/{{ clean_url_name }}" target="_blank" class="mobile-btn">📱 Voir Fiche</a>
+                            {% if is_admin %}
+                            <form method="POST" action="/delete" style="margin: 0;" onsubmit="return confirm('Supprimer définitivement cet historique ?');"><input type="hidden" name="bot_key" value="{{ bot_key }}"><button type="submit" class="delete-btn" title="Supprimer cet historique">🗑️</button></form>
+                            {% endif %}
+                        </div>
                     </div>
                 {% endif %}
             {% endfor %}
@@ -588,7 +594,7 @@
 
                                 ${matchHtml}
 
-                                <a href="/tournament/${bot.tournament_id}/${playerSlug}" target="_blank" class="mobile-btn">📱 Lien Mobile</a>
+                                <a href="/tournament/${bot.tournament_id}/${playerSlug}" target="_blank" class="mobile-btn" style="margin-top:6px;">📱 Lien Mobile</a>
                             </div>
                             ${stopForm}
                         </div>`;
