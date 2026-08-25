@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta http-equiv="refresh" content="15">
     <title>Suivi - {{ player }}</title>
+    <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/mobile.css') }}">
 </head>
 <body>
@@ -155,13 +156,9 @@
 
         function urlBase64ToUint8Array(base64String) {
             const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
-            const base64 = (base64String + padding)
-                .replace(/\-/g, '+')
-                .replace(/_/g, '/');
-
+            const base64 = (base64String + padding).replace(/\-/g, '+').replace(/_/g, '/');
             const rawData = window.atob(base64);
             const outputArray = new Uint8Array(rawData.length);
-
             for (let i = 0; i < rawData.length; ++i) {
                 outputArray[i] = rawData.charCodeAt(i);
             }
@@ -169,83 +166,61 @@
         }
 
         async function initServiceWorker() {
-            console.log("=== [WebPush Debug] Diagnostic d'initialisation ===");
-            console.log("[WebPush] Protocole :", window.location.protocol);
-            console.log("[WebPush] VAPID_PUBLIC_KEY reçue :", VAPID_PUBLIC_KEY ? `${VAPID_PUBLIC_KEY.substring(0, 15)}... (longueur: ${VAPID_PUBLIC_KEY.length})` : "❌ VIDE / NON DÉFINIE");
-            console.log("[WebPush] Support ServiceWorker :", 'serviceWorker' in navigator);
-            console.log("[WebPush] Support PushManager :", 'PushManager' in window);
-            console.log("[WebPush] Permission Notifications actuelle :", Notification.permission);
+            if (!VAPID_PUBLIC_KEY) return;
 
-            if (!VAPID_PUBLIC_KEY) {
-                console.error("[WebPush ERROR] La clé VAPID_PUBLIC_KEY n'a pas été transmise par Flask. Vérifiez votre .env ou le redémarrage Docker.");
+            const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+            const isStandalone = window.navigator.standalone || window.matchMedia('(display-mode: standalone)').matches;
+
+            if (isIOS && !isStandalone) {
+                const banner = document.getElementById('push-notification-banner');
+                banner.style.display = 'block';
+                banner.innerHTML = `
+                    <div style="background: #fff3cd; color: #856404; padding: 10px; border-radius: 8px; font-size: 12px; text-align: center;">
+                        📲 <strong>Pour activer les notifications sur iPhone :</strong><br>
+                        Appuyez sur <strong>Partager</strong> puis sur <strong>"Sur l'écran d'accueil"</strong> et relancez l'application.
+                    </div>`;
                 return;
-            }
-
-            if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-                console.warn("[WebPush WARNING] Les Push Notifications nécessitent HTTPS (sauf sur localhost). Le navigateur bloque l'API sur HTTP.");
             }
 
             if ('serviceWorker' in navigator && 'PushManager' in window) {
                 try {
                     const reg = await navigator.serviceWorker.register('/sw.js');
-                    console.log("[WebPush] Service Worker enregistré avec succès (Scope: " + reg.scope + ")");
-
                     const sub = await reg.pushManager.getSubscription();
-                    console.log("[WebPush] Souscription existante sur cet appareil :", sub ? "OUI" : "NON");
-
-                    if (Notification.permission === 'denied') {
-                        console.warn("[WebPush WARNING] L'utilisateur a précédemment bloqué/refusé les notifications sur ce domaine.");
-                    }
 
                     if (!sub && Notification.permission !== 'denied') {
-                        console.log("[WebPush] Condition remplie -> Affichage du bouton d'activation");
                         document.getElementById('push-notification-banner').style.display = 'block';
-                    } else if (sub) {
-                        console.log("[WebPush] L'appareil est déjà abonné aux notifications.");
                     }
                 } catch (err) {
-                    console.error("[WebPush ERROR] Échec de l'enregistrement du Service Worker :", err);
+                    console.error("[WebPush ERROR]", err);
                 }
-            } else {
-                console.error("[WebPush ERROR] Ce navigateur ou contexte (HTTP) ne supporte pas les Service Workers ou la Push API.");
             }
         }
 
         async function subscribeToWebPush() {
-            console.log("[WebPush] Demande de souscription lancée par l'utilisateur...");
             try {
                 const reg = await navigator.serviceWorker.ready;
-                console.log("[WebPush] Conversion de la clé VAPID...");
                 const convertedKey = urlBase64ToUint8Array(VAPID_PUBLIC_KEY);
 
-                console.log("[WebPush] Demande d'autorisation système du navigateur...");
                 const subscription = await reg.pushManager.subscribe({
                     userVisibleOnly: true,
                     applicationServerKey: convertedKey
                 });
 
-                console.log("[WebPush] Souscription locale créée, envoi au serveur Flask...");
-
                 const resp = await fetch('/api/subscribe_webpush', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        tournament_id: TOURNAMENTS_ID,
+                        tournament_id: TOURNAMENT_ID,
                         player: PLAYER_NAME,
                         subscription: subscription
                     })
                 });
 
                 if (resp.ok) {
-                    console.log("[WebPush] Souscription validée et enregistrée côté serveur !");
                     document.getElementById('push-notification-banner').innerHTML = 
                         '<div style="color: #28a745; font-size: 13px; font-weight: bold;">✅ Notifications activées sur cet appareil !</div>';
-                } else {
-                    const errData = await resp.json();
-                    console.error("[WebPush ERROR] Le serveur a rejeté la souscription :", errData);
                 }
             } catch (err) {
-                console.error("[WebPush ERROR] Échec lors de la souscription :", err);
                 alert("Impossible d'activer les notifications : " + err.message);
             }
         }
