@@ -167,8 +167,10 @@ def send_webpush_notification(player_cfg: dict, title: str, body: str, url: str 
     if not subscription_info or not VAPID_PRIVATE_KEY:
         return
 
+    sub_time = player_cfg.get("subscribed_at", "Date inconnue")
+
     if player_cfg.get("dry_run", False):
-        logger.info(f"[DRY RUN] WebPush non envoyé à {player_cfg.get('name')}:\nTitle: {title}\nBody: {body}")
+        logger.info(f"[DRY RUN] WebPush non envoyé à {player_cfg.get('name')} (Inscrit le {sub_time}):\nTitle: {title}\nBody: {body}")
         return
 
     payload = json.dumps({
@@ -185,26 +187,26 @@ def send_webpush_notification(player_cfg: dict, title: str, body: str, url: str 
             vapid_claims={"sub": VAPID_CLAIM_EMAIL},
             timeout=10
         )
-        logger.info(f"[WebPush] Notification envoyée avec succès à {player_cfg.get('name')}")
+        logger.info(f"[WebPush] Notification envoyée avec succès à {player_cfg.get('name')} (Inscrit le {sub_time})")
     except WebPushException as ex:
         logger.error(f"[WebPush] Erreur d'envoi pour {player_cfg.get('name')}: {ex}")
 
 def push_over(player_cfg: dict, message: str, url: str = None, url_title: str = None):
     player_name = player_cfg.get("name", "Unknown")
 
-    if not player_cfg.get("enable_pushover", True):
-        logger.debug(f"[Pushover] Notifications disabled for {player_name}. Skipping.")
+    if not player_cfg.get("enable_pushover", False):
+        logger.debug(f"[Pushover] Notifications désactivées pour {player_name}.")
         return
 
     app_token = player_cfg.get("pushover_app_token")
     user_key = player_cfg.get("pushover_user_key")
 
     if not app_token or not user_key:
-        logger.debug(f"[Pushover] Missing token or user key for {player_name}. Skipping notification.")
+        logger.warning(f"[Pushover] Clés manquantes (token/user) pour {player_name}.")
         return
 
     if player_cfg.get("dry_run", False):
-        logger.info(f"[DRY RUN] Pushover notification not sent to {player_name}:\n--- MESSAGE ---\n{message}\nURL: {url}\n---------------")
+        logger.info(f"[DRY RUN] Pushover notification non envoyée à {player_name}:\n{message}\nURL: {url}")
         return
 
     try:
@@ -216,15 +218,15 @@ def push_over(player_cfg: dict, message: str, url: str = None, url_title: str = 
         }
         if url:
             payload_data["url"] = url
-            payload_data["url_title"] = url_title or "Player Mobile Tracking"
+            payload_data["url_title"] = url_title or "📱 Voir ma fiche mobile"
 
         payload = urllib.parse.urlencode(payload_data)
         headers = {"Content-type": "application/x-www-form-urlencoded"}
         conn.request("POST", "/1/messages.json", payload, headers)
-        conn.getresponse()
-        logger.info(f"[Pushover] Notification successfully sent to {player_name}")
+        res = conn.getresponse()
+        logger.info(f"[Pushover] Notification envoyée à {player_name} (HTTP {res.status})")
     except Exception as e:
-        logger.error(f"[Pushover] Failed to send notification for {player_name}: {e}")
+        logger.error(f"[Pushover] Échec d'envoi pour {player_name}: {e}")
 
 def notify_player(player_cfg: dict, title: str, message: str, url: str = None):
     push_over(player_cfg, message, url=url)

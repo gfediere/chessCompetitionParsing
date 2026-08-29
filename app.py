@@ -1,6 +1,7 @@
 from datetime import datetime
 import glob
 import html
+import http.client
 import json
 import logging
 import os
@@ -10,6 +11,7 @@ import sys
 import threading
 import time
 import unicodedata
+import urllib.parse
 import requests
 from bs4 import BeautifulSoup
 from flask import Flask, flash, redirect, render_template, request, url_for, send_from_directory
@@ -161,6 +163,29 @@ def save_tournament_subscription(t_id, data):
     with open(sub_file, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     logger.info(f"[Subscriptions] Subscription file {sub_file} updated.")
+
+
+def send_pushover_welcome(user_name, t_id, app_token, user_key, server_url):
+    clean_slug = user_name.replace(" ", "").replace("_", "")
+    mobile_url = f"{server_url}/tournament/{t_id}/{clean_slug}"
+    
+    message = f"🏆 Suivi activé pour {user_name} !\nTournoi ID: {t_id}\nVous recevrez une notification à chaque nouvel appariement et résultat."
+    
+    try:
+        conn = http.client.HTTPSConnection("api.pushover.net:443")
+        payload = urllib.parse.urlencode({
+            "token": app_token,
+            "user": user_key,
+            "message": message,
+            "url": mobile_url,
+            "url_title": "📱 Voir ma fiche mobile"
+        })
+        headers = {"Content-type": "application/x-www-form-urlencoded"}
+        conn.request("POST", "/1/messages.json", payload, headers)
+        res = conn.getresponse()
+        logger.info(f"[Pushover] Message de bienvenue envoyé à {user_name} (HTTP {res.status})")
+    except Exception as e:
+        logger.error(f"[Pushover] Échec d'envoi de bienvenue pour {user_name}: {e}")
 
 
 def get_statuses():
@@ -679,6 +704,9 @@ def start():
     k_factor = float(request.form.get("k_factor", "20"))
     server_url = os.getenv("SERVER_URL", "https://chess-bot.fedallica.fr")
 
+    pushover_token = request.form.get("pushover_app_token", "").strip() if enable_pushover else ""
+    pushover_user = request.form.get("pushover_user_key", "").strip() if enable_pushover else ""
+
     sub = get_tournament_subscription(tournament_id)
     sub["tournament_id"] = tournament_id
     sub["players"][user] = {
@@ -686,13 +714,17 @@ def start():
         "k_factor": k_factor,
         "notification_provider": provider,
         "enable_pushover": enable_pushover,
-        "pushover_app_token": request.form.get("pushover_app_token", "").strip() if enable_pushover else "",
-        "pushover_user_key": request.form.get("pushover_user_key", "").strip() if enable_pushover else "",
+        "pushover_app_token": pushover_token,
+        "pushover_user_key": pushover_user,
         "SERVER_URL": server_url,
         "dry_run": bool(request.form.get("dry_run")),
         "subscribed_at": datetime.now().isoformat(timespec='seconds')
     }
     save_tournament_subscription(tournament_id, sub)
+
+    # 🔔 Envoi immédiat du lien mobile via Pushover lors de la souscription
+    if enable_pushover and pushover_token and pushover_user:
+        send_pushover_welcome(user, tournament_id, pushover_token, pushover_user, server_url)
 
     if tournament_id not in active_bots:
         env_child = os.environ.copy()
