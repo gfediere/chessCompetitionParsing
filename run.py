@@ -180,16 +180,20 @@ def send_webpush_notification(player_cfg: dict, title: str, body: str, url: str 
     })
 
     try:
+        clean_private_key = VAPID_PRIVATE_KEY.replace("\\n", "\n").strip()
+
         webpush(
             subscription_info=subscription_info,
             data=payload,
-            vapid_private_key=VAPID_PRIVATE_KEY,
+            vapid_private_key=clean_private_key,
             vapid_claims={"sub": VAPID_CLAIM_EMAIL},
             timeout=10
         )
         logger.info(f"[WebPush] Notification envoyée avec succès à {player_cfg.get('name')} (Inscrit le {sub_time})")
     except WebPushException as ex:
-        logger.error(f"[WebPush] Erreur d'envoi pour {player_cfg.get('name')}: {ex}")
+        logger.error(f"[WebPush] Erreur d'envoi WebPush pour {player_cfg.get('name')}: {ex}")
+    except Exception as ex:
+        logger.error(f"[WebPush] Erreur de clé VAPID ou d'initialisation pour {player_cfg.get('name')}: {ex}")
 
 def push_over(player_cfg: dict, message: str, url: str = None, url_title: str = None):
     player_name = player_cfg.get("name", "Unknown")

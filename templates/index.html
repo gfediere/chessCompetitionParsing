@@ -296,25 +296,54 @@
         {% if not statuses %}
             <p style="color: #888; font-size: 13px;">Aucun historique sauvegardé.</p>
         {% else %}
+            {% set inactive_items = [] %}
             {% for bot_key, data in statuses.items() %}
                 {% set t_id = data.get('tournament_id') %}
                 {% if t_id not in active_bots %}
                     {% set player_name = data.get('user') or bot_key.split('___')[1] %}
-                    {% set clean_url_name = player_name.replace(' ', '').replace('_', '') %}
-                    <div class="archive-item">
-                        <div>
-                            <strong>{{ player_name }}</strong><br>
-                            <small style="color: #666;">{{ data.get('tournament_name', 'Tournoi') }} {% if is_admin %}(ID: {{ t_id }}){% endif %}</small>
-                        </div>
-                        <div style="display: flex; gap: 8px; align-items: center;">
-                            <a href="/tournament/{{ t_id }}/{{ clean_url_name }}" target="_blank" class="mobile-btn">📱 Voir Fiche</a>
-                            {% if is_admin %}
-                            <form method="POST" action="/delete" style="margin: 0;" onsubmit="return confirm('Supprimer définitivement cet historique ?');"><input type="hidden" name="bot_key" value="{{ bot_key }}"><button type="submit" class="delete-btn" title="Supprimer cet historique">🗑️</button></form>
-                            {% endif %}
-                        </div>
-                    </div>
+                    {% set _ = inactive_items.append({'player': player_name, 'bot_key': bot_key, 'data': data, 't_id': t_id}) %}
                 {% endif %}
             {% endfor %}
+
+            {% if not inactive_items %}
+                <p style="color: #888; font-size: 13px;">Aucun historique archivé.</p>
+            {% else %}
+                {% for player, group in inactive_items|groupby('player') %}
+                <details class="player-accordion" style="margin-bottom: 8px; border: 1px solid #e0e0e0; border-radius: 6px; background: #fff; overflow: hidden;">
+                    <summary style="padding: 10px 12px; font-weight: bold; cursor: pointer; background: #f8f9fa; display: flex; justify-content: space-between; align-items: center; user-select: none;">
+                        <span>👤 {{ player }}</span>
+                        <span style="font-size: 12px; color: #666; font-weight: normal; background: #e9ecef; padding: 2px 8px; border-radius: 10px;">
+                            {{ group|length }} tournoi(s) ▾
+                        </span>
+                    </summary>
+                    <div style="padding: 5px 12px; background: #ffffff;">
+                        {% for item in group %}
+                            {% set data = item.data %}
+                            {% set t_id = item.t_id %}
+                            {% set bot_key = item.bot_key %}
+                            {% set clean_url_name = item.player.replace(' ', '').replace('_', '') %}
+                            <div class="archive-item" style="padding: 8px 0; border-bottom: 1px solid #f0f0f0; display: flex; justify-content: space-between; align-items: center;">
+                                <div style="flex: 1; padding-right: 10px;">
+                                    <small style="color: #0056b3; font-weight: 600; font-size: 12px;">🏆 {{ data.get('tournament_name', 'Tournoi') }}</small>
+                                    {% if is_admin %}
+                                        <br><small style="color: #888; font-size: 10px;">ID: {{ t_id }}</small>
+                                    {% endif %}
+                                </div>
+                                <div style="display: flex; gap: 8px; align-items: center;">
+                                    <a href="/tournament/{{ t_id }}/{{ clean_url_name }}" target="_blank" class="mobile-btn">📱 Voir Fiche</a>
+                                    {% if is_admin %}
+                                    <form method="POST" action="/delete" style="margin: 0;" onsubmit="return confirm('Supprimer définitivement cet historique ?');">
+                                        <input type="hidden" name="bot_key" value="{{ bot_key }}">
+                                        <button type="submit" class="delete-btn" title="Supprimer cet historique">🗑️</button>
+                                    </form>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        {% endfor %}
+                    </div>
+                </details>
+                {% endfor %}
+            {% endif %}
         {% endif %}
     </div>
 

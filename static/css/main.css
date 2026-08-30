@@ -200,3 +200,21 @@ button:hover { background: #218838; }
     display: none;
     font-weight: 500;
 }
+
+/* Accordéon par joueur */
+.player-accordion summary::-webkit-details-marker {
+    display: none;
+}
+
+.player-accordion summary {
+    list-style: none;
+}
+
+.player-accordion[open] summary {
+    background: #eef4fc;
+    border-bottom: 1px solid #e0e0e0;
+}
+
+.player-accordion summary:hover {
+    background: #f0f4f8;
+}
