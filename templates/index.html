@@ -347,8 +347,10 @@
         {% endif %}
     </div>
 
+    <div id="app-data" data-is-admin="{{ is_admin | tojson | e }}" style="display: none;"></div>
     <script>
-        const isAdmin = {{ 'true' if is_admin else 'false' }};
+        const appData = document.getElementById('app-data');
+        const isAdmin = appData ? JSON.parse(appData.dataset.isAdmin) : false;
         let currentTournamentPlayers = [];
 
         function toggleNotificationProvider(provider) {
